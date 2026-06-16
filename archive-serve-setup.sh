@@ -2,14 +2,14 @@
 #
 # archive-serve-setup.sh — Phase 3: let the family browse the archive from iPhones/iPads.
 #
-# Publishes the archive as a READ-ONLY SMB share that is reachable ONLY over the Tailscale
-# tailnet (and loopback) — never the local network or the internet. iOS/iPadOS's built-in
-# Files app speaks SMB natively: Browse -> Connect to Server -> smb://<tailscale-name>.
+# Publishes the archive as a READ-ONLY SMB share on the LOCAL NETWORK (and over your tailnet if
+# you use one), so the family can browse it from the iOS/iPadOS Files app:
+#   Browse -> Connect to Server -> smb://<this-machine>.local
+# It is NOT exposed to the internet (a home router/NAT does not forward inbound SMB).
 #
 # Safety choices:
 #   * read only = yes            (the family can view/copy, never modify or delete)
-#   * interfaces = lo tailscale0 + bind interfaces only = yes  (not exposed on LAN/Wi-Fi/WAN)
-#   * authenticated (no guest)   (a dedicated, login-less SMB account)
+#   * authenticated (no guest)   (a dedicated, login-less SMB account with a password)
 #   * SMB2+ only, encryption desired
 #
 # Reads ARCHIVE_ROOT from /etc/archive-ingest.conf. Run as a REGULAR user with sudo.
@@ -66,10 +66,10 @@ Run archive-ingest-setup.sh and ingest at least one source first, or set SERVE_P
 SERVE_OWNER="$(stat -c %U "$SERVE_PATH" 2>/dev/null || echo root)"
 SERVE_GROUP="$(stat -c %G "$SERVE_PATH" 2>/dev/null || echo root)"
 
-log "This will configure a READ-ONLY, tailnet-only SMB share, using sudo:"
+log "This will configure a READ-ONLY SMB share for the local network, using sudo:"
 printf '    - install: samba\n'
 printf '    - share   [%s]  ->  %s   (read only, owner %s:%s)\n' "$SHARE_NAME" "$SERVE_PATH" "$SERVE_OWNER" "$SERVE_GROUP"
-printf '    - listen on: lo + tailscale0 ONLY (bind interfaces only) — not the LAN or internet\n'
+printf '    - reachable on the local network (and your tailnet); allowed through the firewall on 445\n'
 printf '    - SMB login: %s  (no shell; you set its password below)\n' "$SAMBA_USER"
 printf '    - managed config: %s  (included from /etc/samba/smb.conf)\n' "$MANAGED"
 if [[ "${ASSUME_YES}" != "true" ]]; then
@@ -82,20 +82,12 @@ log "Installing Samba"
 sudo apt-get update -y
 sudo apt-get install -y samba
 
-# Warn (don't fail) if the tailnet interface isn't up yet — smbd will bind it once it appears.
-if ! ip link show tailscale0 >/dev/null 2>&1; then
-  warn "tailscale0 not present yet. Run 'sudo tailscale up' first, then 'sudo systemctl restart smbd'."
-fi
-
 log "Writing the managed share config"
 sudo tee "$MANAGED" >/dev/null <<EOF
 # Managed by archive-serve-setup.sh — edit SERVE_PATH/SAMBA_USER and re-run, or edit here and
-# 'sudo systemctl restart smbd'. Serves the archive READ-ONLY over the tailnet only.
+# 'sudo systemctl restart smbd'. Serves the archive READ-ONLY on the local network (and tailnet).
 [global]
    server string = Digital Archive (read-only)
-   # Listen ONLY on loopback and the Tailscale interface. Never the LAN/Wi-Fi/WAN.
-   interfaces = lo tailscale0
-   bind interfaces only = yes
    server min protocol = SMB2
    smb encrypt = desired
    # Friendlier browsing for Apple (iPhone/iPad/Mac) clients.
@@ -165,25 +157,33 @@ log "Enabling and (re)starting smbd"
 sudo systemctl enable --now smbd >/dev/null 2>&1 || true
 sudo systemctl restart smbd
 
+# Allow SMB through the host firewall (if ufw is active) so devices on the local network can reach
+# it. A home router/NAT still keeps it off the public internet.
+if command -v ufw >/dev/null 2>&1 && sudo ufw status 2>/dev/null | grep -q "Status: active"; then
+  sudo ufw allow Samba >/dev/null 2>&1 || sudo ufw allow 445/tcp >/dev/null 2>&1 || true
+  info "allowed SMB through ufw for the local network."
+fi
+
 # ---- Connection instructions -----------------------------------------------------------------
-ts_ip="$(tailscale ip -4 2>/dev/null | head -1 || true)"
+host_short="$(hostname -s 2>/dev/null || hostname)"
+lan_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
 ts_name="$(tailscale status --json 2>/dev/null | jq -r '.Self.DNSName // empty' 2>/dev/null | sed 's/\.$//' || true)"
-log "Done — the archive is shared READ-ONLY over your tailnet."
+log "Done — the archive is shared READ-ONLY on the local network."
 cat <<EOF
-    On each iPhone/iPad (must be signed in to the same Tailscale account):
+    On each iPhone/iPad (on the same home Wi-Fi):
       1. Open the Files app -> Browse.
       2. Tap the "..." menu (top-right) -> Connect to Server.
-      3. Enter:   smb://${ts_name:-${ts_ip:-<this-machine-tailscale-name>}}
+      3. Enter:   smb://${host_short}.local        (or  smb://${lan_ip:-<this-machine-LAN-IP>} )
       4. Connect As: Registered User
          Name:     ${SAMBA_USER}
          Password: $( [[ -n "$GENERATED_PW" ]] && echo "${GENERATED_PW}   (save this now)" || echo "the password you just set" )
       5. Open the "${SHARE_NAME}" share.
 
     Notes:
-      - The share is READ-ONLY: the family can view and copy, never change or delete.
-      - It is reachable only over Tailscale (lo + tailscale0), not the local network.
-      - If you see no server, run 'sudo tailscale up' on this machine, then
-        'sudo systemctl restart smbd', and make sure the iPhone's Tailscale is on.
+      - The share is READ-ONLY and password-protected: the family can view and copy, never change/delete.
+      - It is on the local network, not the public internet (your router/NAT blocks inbound SMB).
+      - You can also reach it remotely over your tailnet at:  smb://${ts_name:-<your-tailscale-name>}
+      - If "smb://${host_short}.local" doesn't resolve on a device, use the LAN IP shown above.
       - Re-run archive-index after new ingests so search stays current (see archive-search-setup.sh).
 EOF
 [[ -n "$GENERATED_PW" ]] && warn "The generated password above is shown only once. Save it now."
