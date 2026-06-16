@@ -79,8 +79,8 @@ fi
 sudo -v
 
 log "Installing packages"
-sudo apt-get update -y
-sudo apt-get install -y git python3-recoll python3-waitress caddy
+sudo DEBIAN_FRONTEND=noninteractive apt-get update -y
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y git python3-recoll python3-waitress caddy
 
 log "Fetching the recoll web UI (${WEBUI_REPO})"
 if [[ -d "${WEBUI_DIR}/.git" ]]; then

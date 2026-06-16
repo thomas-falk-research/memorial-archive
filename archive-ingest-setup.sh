@@ -154,9 +154,9 @@ sudo -v
 # 1. Core packages (must-have).
 # ----------------------------------------------------------------------------------------------
 step "Installing core packages (filesystems, network shares, recovery, integrity)"
-run "Updating package lists" sudo apt-get update
+run "Updating package lists" sudo DEBIAN_FRONTEND=noninteractive apt-get update
 run "Installing ${#CORE_PKGS[@]} core packages (can take a few minutes)" \
-    sudo apt-get install -y "${CORE_PKGS[@]}"
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${CORE_PKGS[@]}"
 
 # ----------------------------------------------------------------------------------------------
 # 2. Best-effort extras (names vary by release; missing ones are reported, not fatal).
@@ -164,7 +164,7 @@ run "Installing ${#CORE_PKGS[@]} core packages (can take a few minutes)" \
 step "Installing best-effort extras (skipped individually if not in this release)"
 for pkg in "${BEST_EFFORT_PKGS[@]}"; do
   # shellcheck disable=SC2024  # log is user-owned; the redirect is meant to run as us, not root
-  if sudo apt-get install -y "$pkg" >>"$LOGFILE" 2>&1; then info "installed: $pkg"
+  if sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "$pkg" >>"$LOGFILE" 2>&1; then info "installed: $pkg"
   else warn "unavailable on this release: $pkg (skipped)"; SKIPPED+=("$pkg"); fi
 done
 
@@ -173,7 +173,7 @@ done
 # ----------------------------------------------------------------------------------------------
 step "Installing BagIt (optional preservation packaging)"
 # shellcheck disable=SC2024  # log is user-owned; the redirect is meant to run as us, not root
-if command -v pipx >/dev/null 2>&1 || sudo apt-get install -y pipx >>"$LOGFILE" 2>&1; then
+if command -v pipx >/dev/null 2>&1 || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y pipx >>"$LOGFILE" 2>&1; then
   if pipx install bagit >>"$LOGFILE" 2>&1; then info "installed: bagit (CLI: bagit.py)"
   else warn "bagit via pipx failed (optional)"; SKIPPED+=("bagit"); fi
 else
@@ -186,7 +186,7 @@ fi
 install_apfs() {
   command -v apfs-fuse >/dev/null 2>&1 && { info "apfs-fuse already installed."; return 0; }
   run "Installing build dependencies" \
-      sudo apt-get install -y cmake g++ git libfuse3-dev libbz2-dev zlib1g-dev libattr1-dev || return 1
+      sudo DEBIAN_FRONTEND=noninteractive apt-get install -y cmake g++ git libfuse3-dev libbz2-dev zlib1g-dev libattr1-dev || return 1
   local d; d="$(mktemp -d)"
   run "Cloning apfs-fuse source" \
       git clone --recursive --depth 1 https://github.com/sgan81/apfs-fuse "${d}/apfs-fuse" || { rm -rf "${d}"; return 1; }

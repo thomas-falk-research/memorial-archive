@@ -79,8 +79,8 @@ fi
 sudo -v
 
 log "Installing Samba"
-sudo apt-get update -y
-sudo apt-get install -y samba
+sudo DEBIAN_FRONTEND=noninteractive apt-get update -y
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y samba
 
 log "Writing the managed share config"
 sudo tee "$MANAGED" >/dev/null <<EOF

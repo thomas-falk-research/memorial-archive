@@ -62,8 +62,8 @@ fi
 sudo -v
 
 log "Installing packages for network shares and backups"
-sudo apt-get update -y
-sudo apt-get install -y nfs-common cifs-utils rsync
+sudo DEBIAN_FRONTEND=noninteractive apt-get update -y
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nfs-common cifs-utils rsync
 
 log "Installing commands to /usr/local/bin"
 
