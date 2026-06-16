@@ -218,6 +218,19 @@ else
   warn "auto-mounted read-write before you write-block them."
 fi
 
+# System-wide belt-and-suspenders: tell udisks not to auto-mount hot-plugged USB filesystems, so
+# no desktop session can mount source media read-write before safe-mount engages the write-block.
+# This only suppresses *automatic* mounting — it does NOT write-block — so the archive/backup
+# volumes you mount explicitly (via fstab) are unaffected.
+info "installing udev rule to suppress auto-mount of USB media (UDISKS_AUTO=0)"
+sudo tee /etc/udev/rules.d/99-archive-no-automount.rules >/dev/null <<'RULE'
+# Installed by archive-ingest-setup.sh — do not auto-mount hot-plugged USB filesystems.
+# safe-mount mounts source media read-only behind a block-layer write-block instead.
+SUBSYSTEM=="block", ENV{ID_BUS}=="usb", ENV{ID_FS_USAGE}=="filesystem", ENV{UDISKS_AUTO}="0"
+RULE
+sudo udevadm control --reload-rules 2>/dev/null || true
+sudo udevadm trigger --subsystem-match=block 2>/dev/null || true
+
 # ----------------------------------------------------------------------------------------------
 # 6. safe-mount
 # ----------------------------------------------------------------------------------------------
@@ -354,6 +367,10 @@ case "$fstype" in
     sudo apfs-fuse -o ro "$dev" "$mnt"; rc=$? ;;
   hfsplus|hfs)
     sudo mount -t hfsplus -o ro,force "$dev" "$mnt"; rc=$? ;;   # 'force' for journaled/dirty HFS+
+  ext4|ext3)
+    # noload: never replay the journal, so a dirty ext volume mounts read-only instead of being
+    # refused — and a journal replay can never write back to the (supposedly read-only) source.
+    sudo mount -t "$fstype" -o ro,noload "$dev" "$mnt"; rc=$? ;;
   *)
     sudo mount -o ro "$dev" "$mnt"; rc=$? ;;
 esac
