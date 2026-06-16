@@ -80,14 +80,36 @@ base_and_locale() {
   info "LANG set to ${LOCALE} (takes effect in new login sessions)."
 }
 
+# Probe an apt repo for a published suite; echo the preferred codename if reachable, else the
+# first reachable fallback, else the preferred (so apt surfaces a clear error). Network-tolerant.
+resolve_suite() {
+  local base="$1" preferred="$2"; shift 2
+  local cand
+  for cand in "${preferred}" "$@"; do
+    if curl -fsSL -o /dev/null --max-time 15 "${base}/dists/${cand}/Release" 2>/dev/null; then
+      printf '%s\n' "${cand}"; return 0
+    fi
+  done
+  printf '%s\n' "${preferred}"; return 0
+}
+
 # ----------------------------------------------------------------------------------------------
 # 2. Third-party APT repositories (deb822 .sources + keyrings under /etc/apt/keyrings).
-#    download.docker.com and pkgs.tailscale.com publish the 'resolute' suite; cli.github.com
+#    download.docker.com and pkgs.tailscale.com publish per-codename suites; cli.github.com
 #    uses a codename-independent 'stable' suite.
 # ----------------------------------------------------------------------------------------------
 add_apt_repos() {
   log "Configuring Docker, Tailscale, and GitHub CLI apt repositories"
   sudo install -m 0755 -d /etc/apt/keyrings
+
+  # A brand-new Ubuntu release can ship before vendors publish a matching apt suite. Probe for
+  # ${CODENAME}; if it 404s, fall back to the newest published LTS so `apt-get update` cannot
+  # hard-fail the whole provision. Re-run later to pick up the native suite once it's published.
+  local docker_suite tailscale_suite
+  docker_suite="$(resolve_suite https://download.docker.com/linux/ubuntu "${CODENAME}" noble jammy)"
+  tailscale_suite="$(resolve_suite https://pkgs.tailscale.com/stable/ubuntu "${CODENAME}" noble jammy)"
+  [[ "${docker_suite}"    == "${CODENAME}" ]] || warn "Docker has no '${CODENAME}' apt suite yet; using '${docker_suite}'."
+  [[ "${tailscale_suite}" == "${CODENAME}" ]] || warn "Tailscale has no '${CODENAME}' apt suite yet; using '${tailscale_suite}'."
 
   # --- Docker ---
   if [[ ! -f /etc/apt/keyrings/docker.asc ]]; then
@@ -97,21 +119,21 @@ add_apt_repos() {
   sudo tee /etc/apt/sources.list.d/docker.sources >/dev/null <<EOF
 Types: deb
 URIs: https://download.docker.com/linux/ubuntu
-Suites: ${CODENAME}
+Suites: ${docker_suite}
 Components: stable
 Architectures: ${ARCH}
 Signed-By: /etc/apt/keyrings/docker.asc
 EOF
 
-  # --- Tailscale ---
+  # --- Tailscale --- (key file is per-codename too, so fetch it for the resolved suite)
   if [[ ! -f /usr/share/keyrings/tailscale-archive-keyring.gpg ]]; then
-    curl -fsSL "https://pkgs.tailscale.com/stable/ubuntu/${CODENAME}.noarmor.gpg" \
+    curl -fsSL "https://pkgs.tailscale.com/stable/ubuntu/${tailscale_suite}.noarmor.gpg" \
       | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
   fi
   sudo tee /etc/apt/sources.list.d/tailscale.sources >/dev/null <<EOF
 Types: deb
 URIs: https://pkgs.tailscale.com/stable/ubuntu
-Suites: ${CODENAME}
+Suites: ${tailscale_suite}
 Components: main
 Architectures: ${ARCH}
 Signed-By: /usr/share/keyrings/tailscale-archive-keyring.gpg

@@ -184,7 +184,7 @@ verify_sums_and_get_hash() {
         warn "SKIP_GPG=1: skipping signature check. Integrity is checked via SHA256 only,"
         warn "which detects corruption but NOT a maliciously substituted image. Not recommended."
     else
-        info "Importing and verifying Ubuntu signing keys..."
+        info "Importing Ubuntu signing keys from ${KEYSERVER} (may take a few seconds)..."
         if ! gpg --batch --quiet --keyserver "${KEYSERVER}" \
                  --recv-keys "${UBUNTU_KEY_IDS[@]}" >/dev/null 2>&1; then
             die "Could not fetch signing keys from ${KEYSERVER}. If this network blocks keyservers,
@@ -212,6 +212,7 @@ verify_sums_and_get_hash() {
 ISO_PATH=""
 check_iso_hash() {
     [[ -f "$1" ]] || return 1
+    info "Checking the ISO's SHA-256 (a few seconds on a multi-GB file)..."
     local got; got="$(sha256sum "$1" | awk '{print $1}')"
     [[ "${got}" == "${ISO_SHA256}" ]]
 }
@@ -248,8 +249,9 @@ obtain_iso() {
     die "Downloaded ISO failed checksum verification. The download may be corrupt; re-run to retry."
 }
 chown_cache() {
-    [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]] \
-        && chown -R "${SUDO_USER}:${SUDO_USER}" "${CACHE_DIR}" 2>/dev/null || true
+    if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
+        chown -R "${SUDO_USER}:${SUDO_USER}" "${CACHE_DIR}" 2>/dev/null || true
+    fi
 }
 
 # ----- Identify the running system's disk(s) so we never offer them -------------------
@@ -362,20 +364,24 @@ confirm_and_write() {
 
     info "Writing ${ISO_NAME} to ${DEV} (several minutes; progress below)..."
     dd if="${ISO_PATH}" of="${DEV}" bs=4M status=progress conv=fdatasync
-    info "Flushing kernel buffers..."
+    info "Write complete. Flushing buffers to the USB stick — this can take a minute"
+    info "or more on a slow drive and will look paused. Do NOT unplug the drive yet."
     sync
     partprobe "${DEV}" 2>/dev/null || blockdev --rereadpt "${DEV}" 2>/dev/null || true
 
     if [[ "${VERIFY_WRITE}" == "1" ]]; then
-        info "Verifying write: reading back $(hsize "${iso_bytes}") and comparing hashes..."
+        info "Verifying the write: reading $(hsize "${iso_bytes}") back from ${DEV} and comparing"
+        info "hashes. Progress is shown below — this is the slow step that previously looked frozen."
         local back
-        back="$(head -c "${iso_bytes}" "${DEV}" | sha256sum | awk '{print $1}')"
+        back="$(dd if="${DEV}" bs=4M iflag=count_bytes count="${iso_bytes}" status=progress \
+                | sha256sum | awk '{print $1}')"
         [[ "${back}" == "${ISO_SHA256}" ]] \
             || die "WRITE VERIFICATION FAILED: the drive does not match the ISO. It may be faulty — do not use it."
         ok "Write verified: ${DEV} matches the ISO byte-for-byte."
     else
         warn "VERIFY_WRITE=0: skipped read-back verification."
     fi
+    info "Final sync (flushing any remaining buffers)..."
     sync
 }
 
