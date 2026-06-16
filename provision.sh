@@ -255,7 +255,9 @@ install_go() {
   [[ -n "${sum}" && "${sum}" != "null" ]] || die "Could not find published SHA256 for ${tarball}."
 
   tmp="$(mktemp -d)"
-  trap 'rm -rf "${tmp}"' RETURN
+  # ${tmp:-}: this RETURN trap also fires when later functions (e.g. main) return, where 'tmp'
+  # is out of scope — the :- keeps it from tripping 'set -u' (rm -rf "" is a harmless no-op).
+  trap 'rm -rf "${tmp:-}"' RETURN
   curl -fsSL "${url}" -o "${tmp}/${tarball}"
   echo "${sum}  ${tmp}/${tarball}" | sha256sum -c -   # aborts (set -e) if the checksum mismatches
 
