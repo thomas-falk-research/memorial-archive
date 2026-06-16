@@ -16,8 +16,10 @@ an unexpected loss. The scripts are deliberately conservative: they read source 
 - A dedicated mini-PC running **Ubuntu 26.04 LTS** (desktop).
 - **1 TB internal NVMe** — the OS and working disk.
 - **2 TB external NVMe SSD** — the archive (the verified master copies live here).
-- **A Tailscale-mounted ZFS share** (off-site/primary) — the backup target.
-- The family browses from **iPhones/iPads** over Tailscale; there is no other computer.
+- **A Tailscale-mounted ZFS share** (off-site) — the backup target.
+- The family browses/searches from **iPhones/iPads on the home Wi-Fi**; there is no other computer.
+- **Tailscale** is for *your* remote administration (SSH in to run and support it) and to mount the
+  off-site backup share — it is **not** required for the family's day-to-day access.
 
 Everything is config-driven, so it adapts to other disks, paths, networks, and devices.
 
@@ -31,14 +33,15 @@ Everything is config-driven, so it adapts to other disks, paths, networks, and d
 | 1 | `provision.sh` | Base tooling: Docker + Compose, Ansible, Tailscale, Git + GitHub CLI, Rust, Go, Chromium, hardened SSH, correct UTF-8 locale, firewall + auto-updates. | regular user w/ sudo |
 | 2 | `archive-ingest-setup.sh` | The ingestion core: read any disk/share **read-only** behind a write-block and make verified, checksummed master copies. Installs `safe-mount`, `ingest-verify`, `archive-verify`, and the guided `archive` menu. | regular user w/ sudo |
 | 3 | `archive-search-setup.sh` | Make the archive keyword-searchable (a local, GUI-free "Everything" + full-text): `recoll`, `plocate`, Outlook-PST extraction. Installs `archive-index`, `archive-search`, `archive-find`. | regular user w/ sudo |
-| 4 | `archive-serve-setup.sh` | Share the archive **read-only** over the tailnet so the family can browse it from the iPhone/iPad Files app. | regular user w/ sudo |
+| 4 | `archive-serve-setup.sh` | Share the archive **read-only** on the local network so the family can browse it from the iPhone/iPad Files app (SMB). | regular user w/ sudo |
 | 5 | `archive-storage-setup.sh` | Mount the external archive disk and the backup target safely (via `fstab`, `nofail`), and run **verified backups**. Installs `archive-storage`, `archive-backup`. | regular user w/ sudo |
+| 6 | `archive-webui-setup.sh` | Let the family **keyword-search** the archive from a phone browser — the recoll web UI behind a password-protected Caddy proxy on the local network. | regular user w/ sudo |
 
 > Run the setup scripts as your **normal user** (the one with sudo) — *not* with `sudo ./script`.
 > They call `sudo` themselves where needed and must know your real home directory.
 
-After `provision.sh`, authenticate the network and code tools once:
-`sudo tailscale up`, then `gh auth login`.
+After `provision.sh`, authenticate the tools once: `sudo tailscale up` (for *your* remote admin
+and the off-site backup), then `gh auth login`.
 
 ---
 
@@ -86,29 +89,29 @@ so they grow with the archive, never the OS disk.
 
 ## The family: browsing from an iPhone/iPad
 
-After `archive-serve-setup.sh`, the archive is a **read-only** SMB share reachable **only over
-Tailscale** (never the local network or internet). On each device (signed in to the same Tailscale
-account):
+After `archive-serve-setup.sh`, the archive is a **read-only**, password-protected SMB share on
+the **home network** (not the public internet). On each device, on the same Wi-Fi:
 
 1. **Files** app → **Browse**.
 2. **⋯** (top-right) → **Connect to Server**.
-3. Enter `smb://<this-machine's-tailscale-name>`.
+3. Enter `smb://<this-machine>.local` (or the machine's LAN IP).
 4. Connect as a **Registered User** with the name/password you set during setup.
 
 The family can view and copy, never change or delete.
 
-### Optional: search from a phone (recoll web UI)
+## The family: searching from a phone
 
-To let the family *keyword-search* (not just browse) from a phone, add the recoll web UI — it is
-not packaged, so it's an opt-in extra. Bind it to the tailnet only:
+After `archive-webui-setup.sh`, the family can keyword-search the whole archive — file *contents*
+(PDF/Office/RTF/email/…) and *names* — from a phone browser. On the home Wi-Fi, open Safari/Chrome:
 
 ```
-sudo apt-get install -y python3-recoll git
-git clone https://framagit.org/medoc92/recollwebui.git /opt/recoll-webui
-# Run it bound to localhost or the tailscale IP, behind a systemd unit, using RECOLL_CONFDIR=/srv/archive/.recoll
+http://<this-machine>.local:8080/        (or  http://<LAN-IP>:8080/)
 ```
 
-Ask and this can be wired up as a hardened, tailnet-only service.
+Sign in with the web login (default name `family`, password set during setup), type keywords, and
+tap a result to open or download it. It is **read-only** and **password-protected**: the recoll web
+UI runs only on loopback and Caddy publishes it on the LAN with the password. Re-run `archive-index`
+after new ingests so results stay current.
 
 ---
 
@@ -149,7 +152,9 @@ Per-user overrides may go in `${XDG_CONFIG_HOME:-~/.config}/archive-ingest.conf`
 - Source media is read **read-only**, behind a verified block-layer write-block; the OS disk is
   always refused.
 - Copies are **checksum-verified** (SHA-256) and carry provenance; bit-rot is detectable later.
-- The family share is **read-only** and **tailnet-only**.
+- The family's access (the SMB share and the search web UI) is **read-only** and
+  **password-protected**, on the local network — not the public internet. Tailscale is only for
+  your remote administration and the off-site backup mount.
 - `fstab` changes use **`nofail`** and are validated with rollback, so a missing drive can never
   block boot.
 - Backups are **additive** (never delete) and **verified** at the destination.
