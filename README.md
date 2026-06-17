@@ -230,6 +230,33 @@ Per-user overrides may go in `${XDG_CONFIG_HOME:-~/.config}/archive-ingest.conf`
 
 ---
 
+## Starting fresh: erase test data before real data
+
+While setting the system up you'll likely ingest test files and drop sample documents/photos into
+Paperless and Immich. Before the **real** data goes in, wipe all of that — otherwise it pollutes
+search results, and a stray test document could be mistaken by the family for the real thing.
+
+Test data hides in several places: the archive copies **and** the search indexes; the **off-site
+backup** (which is additive, so deleting from the archive does *not* remove it from the backup); and
+each app's **own database** (Immich albums/people, Paperless documents). `archive-reset.sh` clears
+all of them in one deliberate, guarded step:
+
+```
+./archive-reset.sh
+```
+
+It is intentionally **not** installed as a command and **not** in the `manage.sh` menu, so it can't
+be run by accident. It must be run at a real terminal; it **shows exactly what it will delete**, then
+requires **two different** typed confirmations (`ERASE ALL DATA`, then the machine's hostname). It
+**keeps** all tooling and configuration — only data is erased — and re-initialises Immich and
+Paperless empty (Paperless keeps its admin login; in Immich you re-create the admin, re-add the
+read-only `/mnt/archive` library, and re-add family users). There is no undo and no `--yes` mode.
+
+Afterwards, run `./archive-doctor.sh` to confirm an empty-but-healthy box (warnings about "no index
+yet" / "no backup yet" are expected on an empty archive and clear after your first real ingest).
+
+---
+
 ## Notes & troubleshooting (lessons from a real install)
 
 - **First thing when anything seems off:** run `./archive-doctor.sh`. It checks the whole system
