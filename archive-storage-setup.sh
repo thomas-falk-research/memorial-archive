@@ -257,7 +257,7 @@ if [[ "$REQUIRE_SEPARATE_BACKUP" == "true" ]]; then
 fi
 
 note "Measuring the archive (can take a moment on large drives)..."
-src_bytes="$(du -sb --exclude='lost+found' --exclude='.recoll' --exclude='.plocate.db' "$ARCHIVE_ROOT" 2>/dev/null | cut -f1)"; src_bytes="${src_bytes:-0}"
+src_bytes="$(du -sb --exclude='lost+found' --exclude='.recoll' --exclude='.plocate.db' --exclude='.derived' "$ARCHIVE_ROOT" 2>/dev/null | cut -f1)"; src_bytes="${src_bytes:-0}"
 avail="$(df -PB1 "$BACKUP_ROOT" | awk 'NR==2{print $4}')"; avail="${avail:-0}"
 floor=$(( MIN_FREE_GIB * 1024 * 1024 * 1024 ))
 echo "Archive size: $(h "$src_bytes")    Backup free: $(h "$avail")    (floor: ${MIN_FREE_GIB} GiB)"
@@ -289,7 +289,7 @@ rm -f "$BACKUP_ROOT/.archive-backup.verified" 2>/dev/null || true
 note "Copying (rsync, additive)..." | tee "$logf"
 set +e
 # --delete is intentionally NOT used: the backup never loses data; index dirs are rebuildable/excluded.
-rsync "${rsync_flags[@]}" --info=progress2 --exclude='lost+found' --exclude='.recoll' --exclude='.plocate.db' --exclude='.archive-backup.*.log' \
+rsync "${rsync_flags[@]}" --info=progress2 --exclude='lost+found' --exclude='.recoll' --exclude='.plocate.db' --exclude='.derived' --exclude='.archive-backup.*.log' \
   "$ARCHIVE_ROOT"/ "$BACKUP_ROOT"/ 2>&1 | tee -a "$logf"
 rc=${PIPESTATUS[0]}
 # Keep errexit OFF here (this script's header is 'set -uo pipefail', not -e, and it checks every exit
@@ -390,7 +390,7 @@ show_status() {
   if [[ -d "$ARCHIVE_ROOT" ]]; then
     if is_sep_mount "$ARCHIVE_ROOT"; then ok "archive is on its own mounted volume:"; else warn "archive is NOT a separate mount (it is on the OS disk):"; fi
     df -h "$ARCHIVE_ROOT" | sed 's/^/    /'
-    used_b="$(du -sb --exclude='.recoll' --exclude='.plocate.db' "$ARCHIVE_ROOT" 2>/dev/null | cut -f1)"; used_b="${used_b:-0}"
+    used_b="$(du -sb --exclude='.recoll' --exclude='.plocate.db' --exclude='.derived' "$ARCHIVE_ROOT" 2>/dev/null | cut -f1)"; used_b="${used_b:-0}"
     used_g=$(( used_b / 1024 / 1024 / 1024 ))
     printf '    archive data: %s GiB used of %s GiB cap\n' "$used_g" "$MAX_ARCHIVE_GIB"
     if (( used_g >= MAX_ARCHIVE_GIB )); then err "    OVER the soft cap — stop ingesting or raise MAX_ARCHIVE_GIB / add storage."
