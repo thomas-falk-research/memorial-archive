@@ -149,6 +149,9 @@ recollindex -c "$RECOLL_CONFDIR" >/dev/null 2>&1 || { err "recollindex failed.";
 note "Building/updating the filename index..."
 updatedb.plocate --database-root "$ARCHIVE_ROOT" --output "$PLOCATE_DB" --require-visibility 0 2>/dev/null \
   || warn "plocate index update failed (filename search may be stale)."
+# The db holds only file NAMES (no contents). Make it readable regardless of which account built it,
+# so 'archive-find' and the search service can always read it (--require-visibility 0 = no per-file checks).
+if [[ -f "$PLOCATE_DB" ]]; then chmod 0644 "$PLOCATE_DB" 2>/dev/null || true; fi
 
 ok "Indexes updated."
 printf '    full-text index : %s  (%s)\n' "$RECOLL_CONFDIR" "$(du -sh "$RECOLL_CONFDIR" 2>/dev/null | cut -f1)"

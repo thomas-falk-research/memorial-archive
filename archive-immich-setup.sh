@@ -87,12 +87,19 @@ log "Fetching Immich's official compose (pinned ${IMMICH_VERSION})"
 sudo curl -fsSL "https://github.com/immich-app/immich/releases/download/${IMMICH_VERSION}/docker-compose.yml" \
   -o "$APP_DIR/docker-compose.yml" || die "Could not download Immich's docker-compose.yml for ${IMMICH_VERSION}."
 
-log "Writing .env (generated DB password) and the read-only archive override"
-if [[ -f "$APP_DIR/.env" ]] && sudo grep -q '^DB_PASSWORD=' "$APP_DIR/.env" 2>/dev/null; then
-  info ".env already exists — keeping it (DB password unchanged)."
-else
-  db_pw="$(openssl rand -hex 16 2>/dev/null || head -c 16 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 24)"
-  sudo tee "$APP_DIR/.env" >/dev/null <<EOF
+log "Writing .env (reuse any existing DB password; pin the resolved version)"
+# Reuse the DB password on re-run, but ALWAYS write the resolved IMMICH_VERSION. Immich pins its
+# image from .env (${IMMICH_VERSION:-release}), so if we kept a stale .env, re-running to update
+# would silently keep the OLD image even though a newer compose was just downloaded.
+db_pw=""
+if [[ -f "$APP_DIR/.env" ]]; then
+  db_pw="$(sudo sed -n 's/^DB_PASSWORD=//p' "$APP_DIR/.env" 2>/dev/null | head -1)"
+  old_ver="$(sudo sed -n 's/^IMMICH_VERSION=//p' "$APP_DIR/.env" 2>/dev/null | head -1)"
+  [[ -n "$old_ver" && "$old_ver" != "$IMMICH_VERSION" ]] && info "updating the pin ${old_ver} -> ${IMMICH_VERSION}."
+fi
+if [[ -n "$db_pw" ]]; then info "reusing the existing database password."
+else db_pw="$(openssl rand -hex 16 2>/dev/null || head -c 16 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 24)"; fi
+sudo tee "$APP_DIR/.env" >/dev/null <<EOF
 # Managed by archive-immich-setup.sh
 UPLOAD_LOCATION=${APP_DIR}/library
 DB_DATA_LOCATION=${APP_DIR}/postgres
@@ -101,8 +108,7 @@ DB_PASSWORD=${db_pw}
 DB_USERNAME=postgres
 DB_DATABASE_NAME=immich
 EOF
-  sudo chmod 600 "$APP_DIR/.env"
-fi
+sudo chmod 600 "$APP_DIR/.env"
 # Expose the archive read-only to immich-server so it can be added as an external library.
 sudo tee "$APP_DIR/docker-compose.override.yml" >/dev/null <<EOF
 # Managed by archive-immich-setup.sh — mount the archive READ-ONLY for an in-place external library.

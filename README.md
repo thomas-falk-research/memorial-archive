@@ -11,6 +11,29 @@ an unexpected loss. The scripts are deliberately conservative: they read source 
 
 ---
 
+## Start here: one menu — `./manage.sh`
+
+You don't have to remember any of the script names below. From this folder, run:
+
+```
+./manage.sh          # (or:  bash manage.sh )
+```
+
+It's a guided menu for the whole system:
+
+- **Check health** — verify everything (runs `archive-doctor`).
+- **Install / set up** — runs the steps below in order, asking before each one.
+- **Update** — `git pull` the latest, then safely refresh what's installed. Passwords, settings, and
+  data are preserved; app versions advance to the latest.
+- **Reinstall / repair** — re-run setup to fix a broken command/service, without changing versions.
+- **Uninstall** — removes the tools only; it **never** touches your archive (`/srv/archive`) or backups.
+- **Everyday tasks** — ingest a drive, rebuild the search index, run a verified backup, show storage.
+
+Run it as your normal user (the one with sudo) — *not* with `sudo`. Everything below still works on
+its own for advanced use; the menu just drives it for you.
+
+---
+
 ## The machine and storage
 
 - A dedicated mini-PC running **Ubuntu 26.04 LTS** (desktop).
@@ -54,6 +77,24 @@ Everything is config-driven, so it adapts to other disks, paths, networks, and d
 
 After `provision.sh`, authenticate the tools once: `sudo tailscale up` (for *your* remote admin
 and the off-site backup), then `gh auth login`.
+
+---
+
+## Check everything: `archive-doctor`
+
+Not sure it's all healthy — or you just pulled an update and want to confirm? Run the **read-only**
+health check from this folder:
+
+```
+./archive-doctor.sh
+```
+
+It inspects storage and mounts, the archive and its `.INCOMPLETE`/checksum integrity, the
+on-site/off-site backup (and how fresh it is), the search index, the family apps (Immich/Paperless)
+and the Caddy front door, the friendly `.home` names, and the installed commands — and prints a
+plain-English ✓ / ! / ✗ for each, with a concrete **fix** for anything that isn't right. It changes
+nothing, so it is always safe to run. (Its exit code is non-zero if any check failed, so a scheduled
+job can use it too.)
 
 ---
 
@@ -175,6 +216,8 @@ Per-user overrides may go in `${XDG_CONFIG_HOME:-~/.config}/archive-ingest.conf`
 
 ## Notes & troubleshooting (lessons from a real install)
 
+- **First thing when anything seems off:** run `./archive-doctor.sh`. It checks the whole system
+  read-only and tells you, in plain English, what's wrong and the exact command to fix it.
 - **Downloaded the repo as a ZIP?** ZIPs don't keep the executable bit, so first:
   `chmod +x *.sh`. (A `git clone` preserves it.)
 - **Run long installs inside `tmux`** (`sudo apt install -y tmux; tmux new -s setup`) so a dropped

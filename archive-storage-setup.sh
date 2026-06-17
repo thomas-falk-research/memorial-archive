@@ -312,8 +312,12 @@ attach_backup() {
        read -rp "SMB username: " smbu; read -rsp "SMB password: " smbp; echo
        local cred=/etc/archive-backup.cred
        printf 'username=%s\npassword=%s\n' "$smbu" "$smbp" | sudo tee "$cred" >/dev/null
-       sudo chmod 600 "$cred"
-       apply_fstab_line "$BACKUP_ROOT" "${unc} ${BACKUP_ROOT} cifs credentials=${cred},nofail,_netdev,uid=$(id -u),gid=$(id -g),file_mode=0644,dir_mode=0755,mfsymlinks 0 0" ;;
+       sudo chmod 600 "$cred"; unset smbu smbp
+       # If the mount fails, apply_fstab_line rolls back fstab — also remove the password file it
+       # would otherwise leave behind (a root-only secret with no entry referencing it).
+       if ! apply_fstab_line "$BACKUP_ROOT" "${unc} ${BACKUP_ROOT} cifs credentials=${cred},nofail,_netdev,uid=$(id -u),gid=$(id -g),file_mode=0644,dir_mode=0755,mfsymlinks 0 0"; then
+         sudo rm -f "$cred"; err "Mount failed — removed the saved credentials file (${cred}); nothing left half-applied."; return 1
+       fi ;;
     q|Q) return 0 ;;
     *) err "Invalid choice."; return 1 ;;
   esac
