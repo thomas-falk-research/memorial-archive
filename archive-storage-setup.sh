@@ -111,7 +111,7 @@ Paperless install on the box:
   2. Copy this 'export/' folder back to  /srv/apps/paperless/export  on the box.
   3. Import it:
        cd /srv/apps/paperless
-       sudo docker compose exec -T webserver document_importer ../export
+       sudo docker compose exec -T webserver document_importer ../export </dev/null
 
 (Adjust the path if you changed APPS_ROOT.)  Docs: https://docs.paperless-ngx.com/administration/
 TXT
@@ -154,11 +154,18 @@ backup_apps() {
 
   local appdst="$BACKUP_ROOT/apps" any=false rc_any=0
 
+  # The per-app tools below send their output to the log, not the screen, so without a heads-up the
+  # run looks frozen. Announce it, and prime sudo up front (visibly) so a later sudo can't block.
+  if [[ -f "$PAPERLESS_DIR/docker-compose.yml" || -f "$IMMICH_DIR/docker-compose.yml" ]]; then
+    note "Backing up the family apps' own data — this can take a minute; details go to ${logf}"
+    sudo -v || warn "Couldn't pre-authorize sudo; the app-data steps may prompt or be skipped."
+  fi
+
   # --- Paperless: its own exporter preserves documents + OCR text + tags + manifest.json --------
   if [[ -f "$PAPERLESS_DIR/docker-compose.yml" ]]; then
     any=true
     note "Backing up Paperless (document_exporter)..."
-    if ( cd "$PAPERLESS_DIR" && sudo docker compose exec -T webserver document_exporter ../export ) >>"$logf" 2>&1; then
+    if ( cd "$PAPERLESS_DIR" && sudo docker compose exec -T webserver document_exporter ../export ) </dev/null >>"$logf" 2>&1; then
       mkdir -p "$appdst/paperless"
       local prc
       rsync -rlt --modify-window=2 "$PAPERLESS_DIR/export/" "$appdst/paperless/export/" >>"$logf" 2>&1
@@ -184,7 +191,7 @@ backup_apps() {
       local dbuser tmp dumpf sz
       dbuser="$(sudo sed -n 's/^DB_USERNAME=//p' "$IMMICH_DIR/.env" 2>/dev/null | head -1)"; dbuser="${dbuser:-postgres}"
       tmp="$(mktemp -d)"; dumpf="$tmp/immich-database.sql.gz"
-      if ( cd "$IMMICH_DIR" && sudo docker compose exec -T database pg_dumpall --clean --if-exists --username="$dbuser" ) 2>>"$logf" | gzip > "$dumpf"; then
+      if ( cd "$IMMICH_DIR" && sudo docker compose exec -T database pg_dumpall --clean --if-exists --username="$dbuser" ) </dev/null 2>>"$logf" | gzip > "$dumpf"; then
         sz="$(stat -c%s "$dumpf" 2>/dev/null || echo 0)"
         if gzip -t "$dumpf" 2>/dev/null && (( sz > 1024 )); then
           mkdir -p "$appdst/immich"
