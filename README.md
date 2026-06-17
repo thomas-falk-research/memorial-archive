@@ -158,3 +158,27 @@ Per-user overrides may go in `${XDG_CONFIG_HOME:-~/.config}/archive-ingest.conf`
 - `fstab` changes use **`nofail`** and are validated with rollback, so a missing drive can never
   block boot.
 - Backups are **additive** (never delete) and **verified** at the destination.
+
+---
+
+## Notes & troubleshooting (lessons from a real install)
+
+- **Downloaded the repo as a ZIP?** ZIPs don't keep the executable bit, so first:
+  `chmod +x *.sh`. (A `git clone` preserves it.)
+- **Run long installs inside `tmux`** (`sudo apt install -y tmux; tmux new -s setup`) so a dropped
+  SSH session can't interrupt a half-finished install. Reconnect with `tmux attach -t setup`.
+- **Every setup script is idempotent** — safe to re-run if something was interrupted.
+- **Tailscale on a fresh box won't finish login from a remote SSH session.** Do `sudo tailscale up`
+  at the machine's own keyboard/console (complete the browser login while the command is still
+  running), or pass a pre-generated `--authkey`. Once it's up you can SSH in over the tailnet.
+- **NFS backup target shows `clnt_create: RPC: Program not registered`?** That's `showmount`
+  (an NFSv3 tool) failing against an **NFSv4** server — harmless. Skip `showmount` and mount
+  directly: `sudo mount -t nfs -o vers=4.1,nofail <server>:/path /srv/backup`.
+- **SMB/CIFS backup target** (e.g. an Unraid share that needs a username/password): `archive-backup`
+  detects it and copies contents + timestamps (SMB can't store Unix permissions); integrity is
+  still proven by the SHA-256 manifest check. Mount it with `archive-storage attach-backup` → SMB.
+- **Apple APFS drives:** `archive-ingest-setup.sh` builds `apfs-fuse` from source (best-effort). If
+  that build failed (it's non-fatal), APFS read support is missing — check the installer log at
+  `~/archive-ingest-setup.*.log`, install any missing build deps, and re-run the script.
+- **`sudo` password prompts appear in the terminal and show nothing as you type** — that's normal,
+  not a hang.

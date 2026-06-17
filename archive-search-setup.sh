@@ -230,8 +230,8 @@ cat <<EOF
     The indexes live on the archive volume (${ARCHIVE_ROOT}/.recoll, ${ARCHIVE_ROOT}/.plocate.db),
     so they grow with the archive — not the OS disk.
 
-    Optional: to let the family search from a browser on their iPhone/iPad, install the
-    recoll web UI (not packaged) and bind it to the tailnet. See README.md ("Search from a phone").
+    To let the family search from a phone browser, run archive-webui-setup.sh — it serves a
+    password-protected recoll web UI on the local network (Caddy in front of a loopback service).
 EOF
 if [[ ${#SKIPPED[@]} -gt 0 ]]; then
   warn "Optional components skipped (not fatal): ${SKIPPED[*]}"
