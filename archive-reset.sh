@@ -146,6 +146,7 @@ reset_archive() {
     warn "Archive not mounted at $ARCHIVE_ROOT — skipping. Mount it and re-run to clean it."
     return 0
   fi
+  guard_path "$ARCHIVE_ROOT" || { err "refusing to operate on an unsafe ARCHIVE_ROOT: '$ARCHIVE_ROOT'"; return 1; }
   say "   Archive: deleting all ingested copies and search indexes..."
   wipe_contents "$ARCHIVE_ROOT/incoming"
   guard_path "$ARCHIVE_ROOT/.recoll"     && sudo rm -rf -- "$ARCHIVE_ROOT/.recoll"
@@ -162,6 +163,7 @@ reset_backup() {
     warn "and re-run this reset to clear it BEFORE the first real backup."
     return 0
   fi
+  guard_path "$BACKUP_ROOT" || { err "refusing to operate on an unsafe BACKUP_ROOT: '$BACKUP_ROOT'"; return 1; }
   say "   Backup: deleting all backed-up copies and app dumps..."
   wipe_contents "$BACKUP_ROOT/incoming"
   guard_path "$BACKUP_ROOT/apps" && sudo rm -rf -- "$BACKUP_ROOT/apps"

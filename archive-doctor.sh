@@ -132,7 +132,7 @@ fi
 
 # ---- 5. search index -------------------------------------------------------------------------
 hdr "Search index"
-if [[ -d "$RECOLL_CONFDIR" ]] && find "$RECOLL_CONFDIR" -name 'xapiandb' -o -name '*.dbi' 2>/dev/null | read -r _; then
+if [[ -d "$RECOLL_CONFDIR" ]] && [[ -n "$(find "$RECOLL_CONFDIR" \( -name xapiandb -o -name '*.dbi' \) -print -quit 2>/dev/null)" ]]; then
   ok "Full-text index present (${RECOLL_CONFDIR})."
 elif [[ -d "$RECOLL_CONFDIR" ]]; then
   wn "recoll config dir exists but the index looks empty."; fix "build it: archive-index"
@@ -183,10 +183,12 @@ if [[ $on80 -eq 0 ]] && have curl; then
   for n in archive photos docs search; do
     name="${n}.${BASE_DOMAIN}"; code="$(http_code "$name")"
     case "$code" in
-      000)  no  "${name} → no response from the front door." ; fix "sudo systemctl status caddy; re-run archive-proxy-setup.sh" ;;
-      401)  ok  "${name} → ${code} (password prompt — correct for search)." ;;
-      50*)  wn  "${name} → ${code} (front door routes OK, but the app behind it is down — see 'Family apps' above)." ;;
-      *)    ok  "${name} → ${code}." ;;
+      000)     no  "${name} → no response from the front door." ; fix "sudo systemctl status caddy; re-run archive-proxy-setup.sh" ;;
+      401)     ok  "${name} → ${code} (password prompt — correct for search)." ;;
+      2*|30*)  ok  "${name} → ${code}." ;;
+      5*)      wn  "${name} → ${code} (front door routes OK, but the app behind it is down — see 'Family apps' above)." ;;
+      4*)      wn  "${name} → ${code} (front door reachable, but this route looks misconfigured)." ; fix "re-run archive-proxy-setup.sh" ;;
+      *)       wn  "${name} → ${code} (unexpected — check the front door)." ;;
     esac
   done
   if ! getent hosts "archive.${BASE_DOMAIN}" >/dev/null 2>&1; then
