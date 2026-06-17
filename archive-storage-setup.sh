@@ -138,6 +138,9 @@ if [[ "$dest_fstype" == cifs || "$dest_fstype" == smb3 ]]; then
 else
   rsync_flags=(-aHAX)
 fi
+# The 'verified' marker means the LAST backup passed the checksum check. Clear it now and only
+# re-write it after verification succeeds below — so a failed/interrupted run never looks good.
+rm -f "$BACKUP_ROOT/.archive-backup.verified" 2>/dev/null || true
 note "Copying (rsync, additive)..." | tee "$logf"
 set +e
 # --delete is intentionally NOT used: the backup never loses data; index dirs are rebuildable/excluded.
@@ -171,6 +174,7 @@ if [[ $checked -eq 0 ]]; then
   warn "No SHA256SUMS manifests found at the destination to verify (nothing ingested yet?)."
 elif [[ $vrc -eq 0 ]]; then
   ok "Backup verified: $checked copies match their manifests."
+  printf '%s  verified %s copy(ies)\n' "$(date -Is)" "$checked" > "$BACKUP_ROOT/.archive-backup.verified" 2>/dev/null || true
 else
   err "One or more backed-up copies FAILED verification. Re-run the backup; do not trust it yet."
   exit 1

@@ -197,14 +197,17 @@ fi
 # ---- 9. backup freshness ---------------------------------------------------------------------
 hdr "Backup freshness"
 if [[ -d "$BACKUP_ROOT" ]] && is_sep_mount "$BACKUP_ROOT"; then
-  last="$(find "$BACKUP_ROOT" -maxdepth 1 -name '.archive-backup.*.log' -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1)"
-  if [[ -n "$last" ]]; then
-    lts="${last%% *}"; lpath="${last#* }"; age_d=$(( ( $(date +%s) - ${lts%.*} ) / 86400 ))
-    if (( age_d > BACKUP_STALE_DAYS )); then wn "Last backup was ${age_d} day(s) ago (> ${BACKUP_STALE_DAYS})."; fix "run a fresh verified backup: archive-backup"
-    else ok "Last backup was ${age_d} day(s) ago."; fi
-    note "log: ${lpath}"
+  marker="$BACKUP_ROOT/.archive-backup.verified"
+  haslog="$(find "$BACKUP_ROOT" -maxdepth 1 -name '.archive-backup.*.log' -print -quit 2>/dev/null)"
+  if [[ -f "$marker" ]]; then
+    mts="$(stat -c %Y "$marker" 2>/dev/null || echo 0)"; age_d=$(( ( $(date +%s) - mts ) / 86400 ))
+    if (( age_d > BACKUP_STALE_DAYS )); then wn "Last VERIFIED backup was ${age_d} day(s) ago (older than ${BACKUP_STALE_DAYS})."; fix "run a fresh verified backup: archive-backup"
+    else ok "Last VERIFIED backup was ${age_d} day(s) ago."; fi
+  elif [[ -n "$haslog" ]]; then
+    no "A backup has run but did NOT verify (it failed or was interrupted) — don't trust it."
+    fix "re-run it and watch for 'Backup verified': archive-backup"
   else
-    wn "Backup target is mounted but no backup has ever run."
+    wn "No backup has run yet."
     fix "run the first verified backup: archive-backup"
   fi
 else
