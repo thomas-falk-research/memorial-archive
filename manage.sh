@@ -46,6 +46,7 @@ inst_serve()     { grep -qs 'Digital Archive' /etc/samba/smb.conf; }
 inst_webui()     { [[ -f /etc/systemd/system/archive-webui.service ]]; }
 inst_immich()    { [[ -d /srv/apps/immich ]]; }
 inst_paperless() { [[ -d /srv/apps/paperless ]]; }
+inst_copyparty() { [[ -d /srv/apps/copyparty ]]; }
 inst_proxy()     { grep -qs 'archive-proxy-setup.sh' /etc/caddy/Caddyfile; }
 
 # ---- actions ---------------------------------------------------------------------------------
@@ -65,7 +66,8 @@ do_install() {
   if confirm "6) Phone search web UI?";                            then run archive-webui-setup.sh; fi
   if confirm "7) Photos & videos (Immich)?";                       then run archive-immich-setup.sh; fi
   if confirm "8) Documents (Paperless-ngx)?";                      then run archive-paperless-setup.sh; fi
-  if confirm "9) One-URL front door (portal + friendly names)?";   then run archive-proxy-setup.sh; fi
+  if confirm "9) Files web browser (copyparty)?";                  then run archive-copyparty-setup.sh; fi
+  if confirm "10) One-URL front door (portal + friendly names)?";  then run archive-proxy-setup.sh; fi
   ok "Install run complete. Tip: choose 'Check health' to verify it all."
 }
 
@@ -93,6 +95,14 @@ refresh_installed() {
     fi
     run archive-paperless-setup.sh --yes
     unset PAPERLESS_VERSION
+  fi
+  if inst_copyparty; then
+    if [[ "$mode" == "--repair" ]]; then
+      v="$(sudo sed -n 's#.*/ac:##p' /srv/apps/copyparty/docker-compose.yml 2>/dev/null | head -1)"
+      [[ -n "$v" ]] && export COPYPARTY_VERSION="$v"
+    fi
+    run archive-copyparty-setup.sh --yes
+    unset COPYPARTY_VERSION
   fi
   inst_proxy && run archive-proxy-setup.sh --yes
   return 0
@@ -151,14 +161,14 @@ do_uninstall() {
   fi
 
   local app
-  for app in immich paperless; do
+  for app in immich paperless copyparty; do
     if [[ -d "/srv/apps/$app" ]] && confirm "Stop & remove the ${app} containers (keeps its data)?"; then
       ( cd "/srv/apps/$app" && sudo docker compose down 2>/dev/null ) || warn "could not stop ${app} (already down?)"
       ok "Stopped the ${app} containers."
     fi
   done
 
-  for app in immich paperless; do
+  for app in immich paperless copyparty; do
     if [[ -d "/srv/apps/$app" ]]; then
       warn "Removing /srv/apps/${app} deletes ${app}'s OWN data (its database/thumbnails or OCR'd library)."
       warn "Your ORIGINAL files in /srv/archive are not affected."

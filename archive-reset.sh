@@ -34,6 +34,7 @@ BACKUP_ROOT="${BACKUP_ROOT:-/srv/backup}"
 APPS_ROOT="${APPS_ROOT:-/srv/apps}"
 IMMICH_DIR="${IMMICH_DIR:-$APPS_ROOT/immich}"
 PAPERLESS_DIR="${PAPERLESS_DIR:-$APPS_ROOT/paperless}"
+COPYPARTY_DIR="${COPYPARTY_DIR:-$APPS_ROOT/copyparty}"
 
 # ---- output helpers --------------------------------------------------------------------------
 if [[ -t 1 ]]; then
@@ -98,6 +99,9 @@ print_delete_inventory() {
   if [[ -f "$PAPERLESS_DIR/docker-compose.yml" ]]; then
     printf '   • Paperless: ALL documents + tags (its database & media volumes reset empty)\n'
   fi
+  if [[ -f "$COPYPARTY_DIR/docker-compose.yml" ]]; then
+    printf '   • copyparty: its thumbnail/index cache (regenerable; config kept)\n'
+  fi
 }
 
 # ---- the two confirmations -------------------------------------------------------------------
@@ -139,6 +143,16 @@ reset_paperless() {
   say "   Paperless: starting fresh (its admin login is recreated from saved settings)..."
   dc "$PAPERLESS_DIR" up -d >/dev/null 2>&1 || warn "Paperless 'compose up' reported an issue; check it after."
   ok "Paperless reset to empty (same admin login)."
+}
+
+reset_copyparty() {
+  [[ -f "$COPYPARTY_DIR/docker-compose.yml" ]] || { say "   copyparty not installed — skipping."; return 0; }
+  guard_path "$COPYPARTY_DIR" || { err "refusing to operate on an unsafe COPYPARTY_DIR: '$COPYPARTY_DIR'"; return 1; }
+  say "   copyparty: clearing its thumbnail/index cache (config kept; it serves the archive read-only)..."
+  ( cd "$COPYPARTY_DIR" && sudo docker compose down ) >/dev/null 2>&1 || warn "copyparty 'compose down' reported an issue; continuing."
+  wipe_contents "$COPYPARTY_DIR/cfg/hist" || true
+  ( cd "$COPYPARTY_DIR" && sudo docker compose up -d ) >/dev/null 2>&1 || warn "copyparty 'compose up' reported an issue; check it after."
+  ok "copyparty cache cleared (it regenerates thumbnails on demand)."
 }
 
 reset_archive() {
@@ -212,6 +226,7 @@ main() {
     say "== archive-reset on $host at $(date -Is) =="
     reset_immich
     reset_paperless
+    reset_copyparty
     reset_archive
     reset_backup
   } 2>&1 | tee "$log"

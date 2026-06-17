@@ -61,7 +61,8 @@ Everything is config-driven, so it adapts to other disks, paths, networks, and d
 | 6 | `archive-webui-setup.sh` | Let the family **keyword-search** the archive from a phone browser — the recoll web UI behind a password-protected Caddy proxy on the local network. | regular user w/ sudo |
 | 7 | `archive-immich-setup.sh` | *(optional, Docker)* Self-hosted **photos & videos** (Immich) with native iPhone/iPad apps; indexes the archive's photos **read-only, in place** (no copy). Serves on `:2283`. | regular user w/ sudo |
 | 8 | `archive-paperless-setup.sh` | *(optional, Docker)* **Document manager** (Paperless-ngx): OCRs, tags, and searches documents you drop into its `consume/` folder. Serves on `:8000`. | regular user w/ sudo |
-| 9 | `archive-proxy-setup.sh` | *(optional)* One **front door**: Caddy on `:80` serves a **portal page** and routes friendly names — `photos.<domain>` → Immich, `docs.<domain>` → Paperless, `search.<domain>` → recoll — so the family uses memorable URLs with **no ports**. Pair with AdGuard/router DNS rewrites. | regular user w/ sudo |
+| 9 | `archive-copyparty-setup.sh` | *(optional, Docker)* **Read-only web file browser** (copyparty): browse and download *any* file in the archive from a phone/computer browser — no app, no SMB setup. Archive bind-mounted **read-only**; listens on loopback only (publish it via the front door). | regular user w/ sudo |
+| 10 | `archive-proxy-setup.sh` | *(optional)* One **front door**: Caddy on `:80` serves a **portal page** and routes friendly names — `photos.<domain>` → Immich, `docs.<domain>` → Paperless, `search.<domain>` → recoll, `files.<domain>` → copyparty — so the family uses memorable URLs with **no ports**. Pair with AdGuard/router DNS rewrites. | regular user w/ sudo |
 
 > Run the setup scripts as your **normal user** (the one with sudo) — *not* with `sudo ./script`.
 > They call `sudo` themselves where needed and must know your real home directory.
@@ -71,9 +72,9 @@ Everything is config-driven, so it adapts to other disks, paths, networks, and d
 > those already-installed commands — so after you update the repo, **re-run the matching `*-setup.sh`**
 > to pick up the fix. Re-running is safe; every script is idempotent.
 >
-> Scripts 7–8 are optional family-facing apps (Docker Compose stacks). Their data lives on the OS
-> disk under `/srv/apps` (off the 2 TB archive budget); Immich references the archive read-only, so
-> the masters are never modified. Each is pinned to a specific upstream release and re-runnable.
+> Scripts 7–9 are optional family-facing apps (Docker Compose stacks). Their data lives on the OS
+> disk under `/srv/apps` (off the 2 TB archive budget); Immich and copyparty reference the archive
+> read-only, so the masters are never modified. Each is pinned to a specific upstream release and re-runnable.
 
 After `provision.sh`, authenticate the tools once: `sudo tailscale up` (for *your* remote admin
 and the off-site backup), then `gh auth login`.
@@ -166,6 +167,21 @@ Sign in with the web login (default name `family`, password set during setup), t
 tap a result to open or download it. It is **read-only** and **password-protected**: the recoll web
 UI runs only on loopback and Caddy publishes it on the LAN with the password. Re-run `archive-index`
 after new ingests so results stay current.
+
+## The family: browsing files from a phone
+
+After `archive-copyparty-setup.sh` (+ the front door), the family can **browse and download any file**
+in the archive from a plain browser — folder by folder, with thumbnails — without the iOS Files-app
+"Connect to Server" step. On the home Wi-Fi, open Safari/Chrome:
+
+```
+http://files.<domain>/        (e.g. http://files.home/ — needs the AdGuard rewrite the proxy prints)
+```
+
+Sign in with the same `family` login as search. It is **strictly read-only**, four ways over: the
+archive is mounted into the container **read-only**, copyparty grants only read (no upload/delete),
+it listens on **loopback** only, and Caddy fronts it with the **password**. The family can view and
+copy; they can never change or delete a master.
 
 ---
 
