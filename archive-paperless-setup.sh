@@ -17,7 +17,7 @@ trap 'printf "\n\033[1;31mERROR\033[0m: command failed at line %s\n" "$LINENO" >
 # ---- Configuration (override via environment) ------------------------------------------------
 APP_DIR="${PAPERLESS_DIR:-/srv/apps/paperless}"
 PAPERLESS_VERSION="${PAPERLESS_VERSION:-}"     # empty = auto-resolve the latest release
-PAPERLESS_PORT="${PAPERLESS_PORT:-8000}"
+PAPERLESS_PORT=8000                            # fixed: Paperless's compose publishes 8000 (the proxy + .home names front it)
 PAPERLESS_ADMIN_USER="${PAPERLESS_ADMIN_USER:-admin}"
 OCR_LANGUAGE="${OCR_LANGUAGE:-eng}"
 FALLBACK_VERSION="v2.20.15"                     # used only if the release lookup fails
@@ -28,7 +28,7 @@ usage() {
 Usage: ${0##*/} [--yes|-y] [--help|-h]
   --yes, -y   skip prompts; generate a random admin password and print it
   --help, -h  show this help and exit
-Env overrides: PAPERLESS_VERSION, PAPERLESS_PORT (default 8000), PAPERLESS_ADMIN_USER (default
+Env overrides: PAPERLESS_VERSION, PAPERLESS_ADMIN_USER (default
 'admin'), OCR_LANGUAGE (default 'eng'), PAPERLESS_DIR.
 USAGE
 }
