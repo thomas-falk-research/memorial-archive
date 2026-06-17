@@ -57,6 +57,24 @@ and the off-site backup), then `gh auth login`.
 
 ---
 
+## Check everything: `archive-doctor`
+
+Not sure it's all healthy — or you just pulled an update and want to confirm? Run the **read-only**
+health check from this folder:
+
+```
+./archive-doctor.sh
+```
+
+It inspects storage and mounts, the archive and its `.INCOMPLETE`/checksum integrity, the
+on-site/off-site backup (and how fresh it is), the search index, the family apps (Immich/Paperless)
+and the Caddy front door, the friendly `.home` names, and the installed commands — and prints a
+plain-English ✓ / ! / ✗ for each, with a concrete **fix** for anything that isn't right. It changes
+nothing, so it is always safe to run. (Its exit code is non-zero if any check failed, so a scheduled
+job can use it too.)
+
+---
+
 ## Day-to-day: gathering files
 
 For everyday work, just run the guided menu:
@@ -175,6 +193,8 @@ Per-user overrides may go in `${XDG_CONFIG_HOME:-~/.config}/archive-ingest.conf`
 
 ## Notes & troubleshooting (lessons from a real install)
 
+- **First thing when anything seems off:** run `./archive-doctor.sh`. It checks the whole system
+  read-only and tells you, in plain English, what's wrong and the exact command to fix it.
 - **Downloaded the repo as a ZIP?** ZIPs don't keep the executable bit, so first:
   `chmod +x *.sh`. (A `git clone` preserves it.)
 - **Run long installs inside `tmux`** (`sudo apt install -y tmux; tmux new -s setup`) so a dropped
