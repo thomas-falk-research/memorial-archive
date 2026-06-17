@@ -166,7 +166,11 @@ Signed-By: /etc/apt/keyrings/githubcli-archive-keyring.gpg
 EOF
 
   log "Refreshing apt with the new repositories"
-  sudo DEBIAN_FRONTEND=noninteractive apt-get update -y
+  # Non-fatal: a third-party repo suite can be briefly unreachable, or unpublished for a brand-new
+  # Ubuntu codename. Don't abort the whole (half-finished) provision — warn and continue; the package
+  # installs below surface anything genuinely missing.
+  sudo DEBIAN_FRONTEND=noninteractive apt-get update -y \
+    || warn "apt update reported errors (a repo may be unreachable/unpublished) — continuing; re-run provision later if package installs fail."
 }
 
 # ----------------------------------------------------------------------------------------------

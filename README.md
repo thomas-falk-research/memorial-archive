@@ -115,9 +115,10 @@ ingest-verify /mnt/ingest/NAME LABEL   # verified copy into the archive (space +
 archive-verify                   # re-check every copy against its checksums (detect bit-rot)
 ```
 
-Each verified copy lands in `/srv/archive/incoming/<label>/<timestamp>/` with a `SHA256SUMS`
-manifest and a `PROVENANCE.txt`. A copy stays marked `.INCOMPLETE` until it fully passes, so a
-partial copy is never mistaken for a good one.
+Each verified copy lands in `/srv/archive/incoming/<label>/<timestamp>/`: the source files
+themselves under `data/`, alongside a `SHA256SUMS` manifest and a `PROVENANCE.txt`. A copy stays
+marked `.INCOMPLETE` until **every** source file has been copied and verified, so a partial copy is
+never mistaken for a good one.
 
 **Read-only is enforced three ways:** desktop auto-mount is disabled, a udev rule stops USB media
 from auto-mounting, and `safe-mount` engages a verified block-layer write-block before mounting.

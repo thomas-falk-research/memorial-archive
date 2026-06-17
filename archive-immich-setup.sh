@@ -17,7 +17,7 @@ trap 'printf "\n\033[1;31mERROR\033[0m: command failed at line %s\n" "$LINENO" >
 # ---- Configuration (override via environment) ------------------------------------------------
 APP_DIR="${IMMICH_DIR:-/srv/apps/immich}"
 IMMICH_VERSION="${IMMICH_VERSION:-}"          # empty = auto-resolve the latest release
-IMMICH_PORT="${IMMICH_PORT:-2283}"
+IMMICH_PORT=2283                              # fixed: Immich's compose publishes 2283 (the proxy + .home names front it)
 FALLBACK_VERSION="v2.7.5"                      # used only if the release lookup fails
 ARCHIVE_ROOT="/srv/archive"
 
@@ -27,7 +27,7 @@ usage() {
 Usage: ${0##*/} [--yes|-y] [--help|-h]
   --yes, -y   skip the confirmation prompt
   --help, -h  show this help and exit
-Env overrides: IMMICH_VERSION (pin a tag), IMMICH_PORT (default 2283), IMMICH_DIR.
+Env overrides: IMMICH_VERSION (pin a tag), IMMICH_DIR.
 USAGE
 }
 while [[ $# -gt 0 ]]; do
