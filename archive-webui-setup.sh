@@ -88,12 +88,12 @@ if [[ -d "${WEBUI_DIR}/.git" ]]; then
 else
   sudo git clone -q "$WEBUI_REPO" "$WEBUI_DIR" || die "Could not clone the recoll web UI from ${WEBUI_REPO}"
 fi
-sudo git -C "$WEBUI_DIR" checkout -q "$WEBUI_PIN" 2>/dev/null || warn "Could not pin to ${WEBUI_PIN}; using the current checkout."
+sudo git -C "$WEBUI_DIR" checkout -q "$WEBUI_PIN" 2>/dev/null || die "Could not check out the pinned commit ${WEBUI_PIN}; refusing to run an unpinned web UI. Check ${WEBUI_REPO} / your network and re-run."
 
 log "Installing the launcher to /usr/local/bin"
 sudo tee /usr/local/bin/archive-webui-run >/dev/null <<'SCRIPT'
 #!/usr/bin/env bash
-# archive-webui-run — launch the recoll web UI on loopback. nginx (with a password) publishes it
+# archive-webui-run — launch the recoll web UI on loopback. Caddy (with a password) publishes it
 # to the local network. Started by the archive-webui systemd service; not normally run by hand.
 set -uo pipefail
 for _cfg in /etc/archive-ingest.conf "${XDG_CONFIG_HOME:-$HOME/.config}/archive-ingest.conf"; do
@@ -152,7 +152,13 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now archive-webui >/dev/null 2>&1 || true
 
 log "Configuring Caddy (password-protected reverse proxy)"
-if sudo test -f "$CADDYFILE" && sudo grep -q 'archive-webui managed' "$CADDYFILE" 2>/dev/null; then
+if sudo test -f "$CADDYFILE" && sudo grep -q 'archive-proxy-setup.sh' "$CADDYFILE" 2>/dev/null; then
+  GEN_PW=""
+  warn "Caddy is managed by archive-proxy-setup.sh (the single .<domain> front door)."
+  warn "Leaving it untouched — overwriting it would destroy the photos/docs/search routing."
+  info "Search is already published at search.<domain> via that front door (proxied to the loopback backend set up above)."
+  info "To change the search password while the front door is active, re-run archive-proxy-setup.sh."
+elif sudo test -f "$CADDYFILE" && sudo grep -q 'archive-webui managed' "$CADDYFILE" 2>/dev/null; then
   GEN_PW=""
   info "Caddy already configured for the archive — leaving the password/port unchanged."
   info "To change the password: sudo caddy hash-password ; edit ${CADDYFILE} ; sudo systemctl reload caddy"

@@ -69,11 +69,20 @@ lan_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
 tz="$(timedatectl show --property=Timezone --value 2>/dev/null || cat /etc/timezone 2>/dev/null || echo 'Etc/UTC')"
 uid="$(id -u)"; gid="$(id -g)"
 
+# Detect a prior install: a re-run must NOT rotate the admin password, regenerate the secret, or
+# wipe your docker-compose.env edits (e.g. PAPERLESS_URL). On re-run we refresh only the compose
+# file and the version pin, and leave your env file untouched.
+first_install=true
+if sudo test -f "$APP_DIR/docker-compose.env" && sudo grep -q 'archive-paperless-setup.sh' "$APP_DIR/docker-compose.env" 2>/dev/null; then
+  first_install=false
+fi
+
 log "This will deploy Paperless-ngx ${PAPERLESS_VERSION} with Docker, using sudo:"
 printf '    - app + database + redis (Docker-managed volumes on the OS disk, off the archive budget)\n'
 printf '    - drop documents to OCR/index into:  %s/consume\n' "$APP_DIR"
 printf '    - reachable on the local network + tailnet at port %s\n' "$PAPERLESS_PORT"
-printf '    - admin login: %s  (you set its password below)\n' "$PAPERLESS_ADMIN_USER"
+if [[ "$first_install" == true ]]; then printf '    - admin login: %s  (you set its password below)\n' "$PAPERLESS_ADMIN_USER"
+else printf '    - re-run: keeping your settings (admin password, PAPERLESS_URL); refreshing to %s\n' "$PAPERLESS_VERSION"; fi
 if [[ "${ASSUME_YES}" != "true" ]]; then
   read -rp $'\nProceed? [y/N] ' _ans
   [[ "${_ans}" =~ ^[Yy] ]] || { echo "Aborted; nothing was changed."; exit 0; }
@@ -81,13 +90,15 @@ fi
 
 # Admin password (terminal only — never echoed; never paste it in chat).
 GEN_PW=""
-if [[ "${ASSUME_YES}" == "true" ]]; then
-  GEN_PW="$(openssl rand -base64 12 2>/dev/null || head -c 9 /dev/urandom | base64)"; admin_pw="$GEN_PW"
-else
-  read -rsp "Set a password for the Paperless '${PAPERLESS_ADMIN_USER}' login: " admin_pw; echo
-  read -rsp "Confirm: " admin_pw2; echo
-  [[ -n "$admin_pw" ]] || die "Password cannot be empty."
-  [[ "$admin_pw" == "$admin_pw2" ]] || die "Passwords did not match."
+if [[ "$first_install" == true ]]; then
+  if [[ "${ASSUME_YES}" == "true" ]]; then
+    GEN_PW="$(openssl rand -base64 12 2>/dev/null || head -c 9 /dev/urandom | base64)"; admin_pw="$GEN_PW"
+  else
+    read -rsp "Set a password for the Paperless '${PAPERLESS_ADMIN_USER}' login: " admin_pw; echo
+    read -rsp "Confirm: " admin_pw2; echo
+    [[ -n "$admin_pw" ]] || die "Password cannot be empty."
+    [[ "$admin_pw" == "$admin_pw2" ]] || die "Passwords did not match."
+  fi
 fi
 
 log "Creating ${APP_DIR} (with consume/ and export/)"
@@ -97,9 +108,14 @@ sudo chown "$uid:$gid" "$APP_DIR/consume" "$APP_DIR/export"
 log "Fetching Paperless-ngx official compose (pinned ${PAPERLESS_VERSION})"
 sudo curl -fsSL "https://raw.githubusercontent.com/paperless-ngx/paperless-ngx/${PAPERLESS_VERSION}/docker/compose/docker-compose.postgres.yml" \
   -o "$APP_DIR/docker-compose.yml" || die "Could not download Paperless's compose for ${PAPERLESS_VERSION}."
-sudo curl -fsSL "https://raw.githubusercontent.com/paperless-ngx/paperless-ngx/${PAPERLESS_VERSION}/docker/compose/docker-compose.env" \
-  -o "$APP_DIR/docker-compose.env" || die "Could not download Paperless's env template."
+if [[ "$first_install" == false ]]; then
+  info "Existing install — keeping your docker-compose.env (admin password, PAPERLESS_URL, secret preserved)."
+else
+  sudo curl -fsSL "https://raw.githubusercontent.com/paperless-ngx/paperless-ngx/${PAPERLESS_VERSION}/docker/compose/docker-compose.env" \
+    -o "$APP_DIR/docker-compose.env" || die "Could not download Paperless's env template."
+fi
 
+if [[ "$first_install" == true ]]; then
 log "Writing settings (.env additions, pinned image, generated secret)"
 if [[ -f "$APP_DIR/.paperless-secret" ]] && sudo test -s "$APP_DIR/.paperless-secret"; then
   secret="$(sudo cat "$APP_DIR/.paperless-secret")"
@@ -122,6 +138,7 @@ PAPERLESS_ADMIN_PASSWORD=${admin_pw}
 EOF
 sudo chmod 600 "$APP_DIR/docker-compose.env"
 unset admin_pw admin_pw2 2>/dev/null || true
+fi
 # Pin the app image (upstream ships :latest) and map the chosen port.
 sudo tee "$APP_DIR/docker-compose.override.yml" >/dev/null <<EOF
 # Managed by archive-paperless-setup.sh — pin the image and the published port.
@@ -145,10 +162,13 @@ log "Starting Paperless-ngx (first run pulls images + initialises the database �
 ( cd "$APP_DIR" && sudo docker compose up -d )
 
 log "Done — Paperless-ngx is starting."
+if [[ -n "$GEN_PW" ]]; then signin="${GEN_PW}   (save this now)"
+elif [[ "$first_install" == true ]]; then signin="the password you just set"
+else signin="your existing admin password (unchanged)"; fi
 cat <<EOF
     Open it (give it a couple of minutes on first start while it migrates the DB):
         http://${host_short}.local:${PAPERLESS_PORT}/     (or  http://${lan_ip:-<LAN-IP>}:${PAPERLESS_PORT}/ )
-      Sign in:  ${PAPERLESS_ADMIN_USER} / $( [[ -n "$GEN_PW" ]] && echo "${GEN_PW}   (save this now)" || echo "the password you just set" )
+      Sign in:  ${PAPERLESS_ADMIN_USER} / ${signin}
 
     To file documents: copy PDFs/scans/images into
         ${APP_DIR}/consume
