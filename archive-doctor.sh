@@ -147,7 +147,7 @@ hdr "Family apps"
 if ! have ss; then
   note "Can't check service ports ('ss' not found)."
 else
-  for entry in "Immich:2283:immich" "Paperless:8000:paperless"; do
+  for entry in "Immich:2283:immich" "Paperless:8000:paperless" "Files (copyparty):3923:copyparty"; do
     nm="${entry%%:*}"; rest="${entry#*:}"; port="${rest%%:*}"; dir="${rest#*:}"
     listening "$port"; lp=$?
     if   [[ $lp -eq 0 ]]; then ok "${nm} is responding on :${port}."
@@ -180,7 +180,9 @@ fi
 # ---- 8. friendly names (only meaningful once the :80 front door is up) ------------------------
 if [[ $on80 -eq 0 ]] && have curl; then
   hdr "Friendly names (tested through the front door)"
-  for n in archive photos docs search; do
+  fn_names=(archive photos docs search)
+  [[ -d "$APPS_ROOT/copyparty" ]] && fn_names+=(files)
+  for n in "${fn_names[@]}"; do
     name="${n}.${BASE_DOMAIN}"; code="$(http_code "$name")"
     case "$code" in
       000)     no  "${name} → no response from the front door." ; fix "sudo systemctl status caddy; re-run archive-proxy-setup.sh" ;;

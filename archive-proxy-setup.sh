@@ -8,6 +8,7 @@
 #   photos.<domain>   -> Immich        (reverse proxy to 127.0.0.1:2283)
 #   docs.<domain>     -> Paperless-ngx (reverse proxy to 127.0.0.1:8000)
 #   search.<domain>   -> recoll web UI (reverse proxy to 127.0.0.1:8088, keeps its password)
+#   files.<domain>    -> copyparty file browser (127.0.0.1:3923, same password) — only if installed
 #
 # Pair this with DNS rewrites in AdGuard Home: point those names at the mini-PC's LAN IP. The
 # config accepts any hostname, so it also works over Tailscale once you route/resolve the names.
@@ -27,12 +28,20 @@ CADDYFILE="${CADDYFILE:-/etc/caddy/Caddyfile}"
 IMMICH_UPSTREAM="${IMMICH_UPSTREAM:-127.0.0.1:2283}"
 PAPERLESS_UPSTREAM="${PAPERLESS_UPSTREAM:-127.0.0.1:8000}"
 SEARCH_UPSTREAM="${SEARCH_UPSTREAM:-127.0.0.1:8088}"
+COPYPARTY_UPSTREAM="${COPYPARTY_UPSTREAM:-127.0.0.1:3923}"
+COPYPARTY_DIR="${COPYPARTY_DIR:-/srv/apps/copyparty}"
 SEARCH_USER="${SEARCH_USER:-family}"
 
 PHOTOS_HOST="photos.${BASE_DOMAIN}"
 DOCS_HOST="docs.${BASE_DOMAIN}"
 SEARCH_HOST="search.${BASE_DOMAIN}"
+FILES_HOST="files.${BASE_DOMAIN}"
 PORTAL_HOST="archive.${BASE_DOMAIN}"
+
+# The Files browser (copyparty) is only routed/shown if it's installed — it serves anonymous-read on
+# loopback, so (like search) Caddy must put it behind the family password.
+copyparty_installed=false
+[[ -d "$COPYPARTY_DIR" ]] && copyparty_installed=true
 
 ASSUME_YES=false
 usage() {
@@ -70,6 +79,7 @@ printf '    %-18s -> portal page (Photos / Documents / Search)\n' "${PORTAL_HOST
 printf '    %-18s -> Immich        (%s)\n' "${PHOTOS_HOST}" "$IMMICH_UPSTREAM"
 printf '    %-18s -> Paperless-ngx (%s)\n' "${DOCS_HOST}" "$PAPERLESS_UPSTREAM"
 printf '    %-18s -> recoll search (%s, keeps its login)\n' "${SEARCH_HOST}" "$SEARCH_UPSTREAM"
+[[ "$copyparty_installed" == true ]] && printf '    %-18s -> files browser (%s, same login)\n' "${FILES_HOST}" "$COPYPARTY_UPSTREAM"
 printf '    portal also answers on the IP (%s) and any unmatched name\n' "${lan_ip:-this host}"
 if [[ "${ASSUME_YES}" != "true" ]]; then
   read -rp $'\nProceed? [y/N] ' _ans
@@ -102,6 +112,17 @@ auth_dir="basic_auth"; probe="$(mktemp)"
 printf 'http://x {\n  %s {\n    %s %s\n  }\n}\n' "$auth_dir" "$SEARCH_USER" "$search_hash" > "$probe"
 caddy validate --adapter caddyfile --config "$probe" >/dev/null 2>&1 || auth_dir="basicauth"
 rm -f "$probe"
+
+# Optional portal tile + Caddy route for the Files browser (only when copyparty is installed).
+files_card=""; files_dns=""
+if [[ "$copyparty_installed" == true ]]; then
+  files_card="$(cat <<HTMLCARD
+    <a class="card" href="http://${FILES_HOST}/"><span class="emoji">📁</span>
+      <span>Browse Files<br><span class="desc">open or download any file</span></span></a>
+HTMLCARD
+)"
+  files_dns="$(printf '        %-16s -> %s' "${FILES_HOST}" "${lan_ip:-<mini-PC IP>}")"
+fi
 
 # ---- Portal page -----------------------------------------------------------------------------
 log "Writing the portal page to ${PORTAL_DIR}"
@@ -142,6 +163,7 @@ sudo tee "$PORTAL_DIR/index.html" >/dev/null <<HTML
       <span>Documents<br><span class="desc">scanned papers, PDFs, letters</span></span></a>
     <a class="card" href="http://${SEARCH_HOST}/"><span class="emoji">🔎</span>
       <span>Search Everything<br><span class="desc">find any file by word or name</span></span></a>
+${files_card}
   </div>
   <footer>${PORTAL_HOST}</footer>
 </body>
@@ -179,6 +201,21 @@ http://${SEARCH_HOST} {
 }
 CADDY
 
+# Append the Files (copyparty) route only when installed. copyparty serves anonymous-read on
+# loopback, so — exactly like search — Caddy gates it with the family password.
+if [[ "$copyparty_installed" == true ]]; then
+  sudo tee -a "$CADDYFILE" >/dev/null <<CADDY2
+
+http://${FILES_HOST} {
+	${auth_dir} {
+		${SEARCH_USER} ${search_hash}
+	}
+	reverse_proxy ${COPYPARTY_UPSTREAM}
+}
+CADDY2
+  info "Added the Files browser route: ${FILES_HOST} -> ${COPYPARTY_UPSTREAM} (password-protected)."
+fi
+
 log "Validating and reloading Caddy"
 if sudo caddy validate --adapter caddyfile --config "$CADDYFILE" >/dev/null 2>&1; then
   sudo systemctl enable --now caddy >/dev/null 2>&1 || true
@@ -201,6 +238,7 @@ cat <<EOF
         ${PHOTOS_HOST}   -> ${lan_ip:-<mini-PC IP>}
         ${DOCS_HOST}     -> ${lan_ip:-<mini-PC IP>}
         ${SEARCH_HOST}   -> ${lan_ip:-<mini-PC IP>}
+${files_dns}
 
     Then, from any device using AdGuard for DNS:
         http://${PORTAL_HOST}/     <- the one address to remember (portal with buttons)
