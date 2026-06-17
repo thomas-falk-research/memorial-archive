@@ -43,6 +43,11 @@ Everything is config-driven, so it adapts to other disks, paths, networks, and d
 > Run the setup scripts as your **normal user** (the one with sudo) — *not* with `sudo ./script`.
 > They call `sudo` themselves where needed and must know your real home directory.
 >
+> **Updating later?** These scripts install commands into `/usr/local/bin` (`archive`,
+> `archive-backup`, `archive-storage`, …). A `git pull` refreshes the files in this folder but **not**
+> those already-installed commands — so after you update the repo, **re-run the matching `*-setup.sh`**
+> to pick up the fix. Re-running is safe; every script is idempotent.
+>
 > Scripts 7–8 are optional family-facing apps (Docker Compose stacks). Their data lives on the OS
 > disk under `/srv/apps` (off the 2 TB archive budget); Immich references the archive read-only, so
 > the masters are never modified. Each is pinned to a specific upstream release and re-runnable.
@@ -174,7 +179,10 @@ Per-user overrides may go in `${XDG_CONFIG_HOME:-~/.config}/archive-ingest.conf`
   `chmod +x *.sh`. (A `git clone` preserves it.)
 - **Run long installs inside `tmux`** (`sudo apt install -y tmux; tmux new -s setup`) so a dropped
   SSH session can't interrupt a half-finished install. Reconnect with `tmux attach -t setup`.
-- **Every setup script is idempotent** — safe to re-run if something was interrupted.
+- **Every setup script is idempotent** — safe to re-run if it was interrupted, or to reinstall the
+  latest version of its commands after a `git pull`. If an installed command (`archive-backup`,
+  `archive-storage`, …) ever behaves differently from what these docs describe, an out-of-date copy is
+  the likeliest cause — re-run its `*-setup.sh` first.
 - **Tailscale on a fresh box won't finish login from a remote SSH session.** Do `sudo tailscale up`
   at the machine's own keyboard/console (complete the browser login while the command is still
   running), or pass a pre-generated `--authkey`. Once it's up you can SSH in over the tailnet.
@@ -184,6 +192,10 @@ Per-user overrides may go in `${XDG_CONFIG_HOME:-~/.config}/archive-ingest.conf`
 - **SMB/CIFS backup target** (e.g. an Unraid share that needs a username/password): `archive-backup`
   detects it and copies contents + timestamps (SMB can't store Unix permissions); integrity is
   still proven by the SHA-256 manifest check. Mount it with `archive-storage attach-backup` → SMB.
+- **A friendly name (`archive.home`, `photos.home`, `docs.home`, `search.home`) won't open?** The
+  device must get its DNS from **AdGuard Home**, where those name→IP rewrites live (family
+  iPhones/iPads do if AdGuard is the network's resolver). The machine's **LAN IP always works**
+  regardless — find it with `hostname -I` and open `http://<that-ip>/`.
 - **Apple APFS drives:** `archive-ingest-setup.sh` builds `apfs-fuse` from source (best-effort). If
   that build failed (it's non-fatal), APFS read support is missing — check the installer log at
   `~/archive-ingest-setup.*.log`, install any missing build deps, and re-run the script.
