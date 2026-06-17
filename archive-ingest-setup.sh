@@ -190,17 +190,25 @@ install_apfs() {
   local d; d="$(mktemp -d)"
   run "Cloning apfs-fuse source" \
       git clone --recursive --depth 1 https://github.com/sgan81/apfs-fuse "${d}/apfs-fuse" || { rm -rf "${d}"; return 1; }
-  # CMake 4 (Ubuntu 26.04) dropped support for apfs-fuse's old cmake_minimum_required; the policy
-  # floor lets its CMakeLists configure anyway (CMake's own suggested workaround).
+  # apfs-fuse's upstream build predates current toolchains; two compatibility shims are needed on
+  # Ubuntu 26.04 and similar:
+  #   * -DCMAKE_POLICY_VERSION_MINIMUM=3.5  : CMake 4 removed its old cmake_minimum_required support.
+  #   * -DCMAKE_CXX_FLAGS=-include cstdint  : GCC 15 no longer pulls <cstdint> in transitively, so we
+  #     force-include it (otherwise uint8_t/uint32_t are undefined and the compile fails).
   run "Compiling apfs-fuse (1-2 minutes)" \
-      bash -c "cd '${d}/apfs-fuse' && mkdir build && cd build && cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5 .. && make -j\"\$(nproc)\" && sudo make install" \
+      bash -c "cd '${d}/apfs-fuse' && mkdir build && cd build && cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_CXX_FLAGS='-include cstdint' .. && make -j\"\$(nproc)\" && sudo make install" \
       || { rm -rf "${d}"; return 1; }
   rm -rf "${d}"
   info "Built apfs-fuse (upstream is unversioned; record the commit if you need reproducibility)."
 }
 if [[ "${INSTALL_APFS}" == "true" ]]; then
   step "Building apfs-fuse (read-only Apple APFS support)"
-  install_apfs || warn "apfs-fuse build failed; continuing without APFS read support (see ${LOGFILE})."
+  if ! install_apfs; then
+    warn "apfs-fuse did not build — continuing WITHOUT Apple APFS read support. This is NOT fatal:"
+    warn "  • Everything else still works: NTFS, exFAT, HFS+, ext, btrfs, XFS, SMB/NFS, BitLocker."
+    warn "  • APFS support is only needed to read Mac-formatted drives."
+    warn "  • To retry: re-run this script (it's safe to re-run). Build details: ${LOGFILE}"
+  fi
 else
   step "Apple APFS support (skipped: INSTALL_APFS=false)"
 fi
