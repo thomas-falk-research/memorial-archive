@@ -180,6 +180,22 @@ archive-backup                   # verified, additive backup to /srv/backup; re-
 `archive-backup` never deletes from the backup, refuses to "back up" onto the same disk as the
 archive, and is only declared good once every destination checksum verifies.
 
+### Immich and Paperless data is backed up too
+
+Those apps keep their own data **outside** the archive — Paperless stores its OCR'd documents, tags
+and metadata; Immich stores albums, people/faces and any photos uploaded from a phone — so a backup
+of `/srv/archive` alone would not bring them back. `archive-backup` therefore **also** backs up each
+installed app, into `/srv/backup/apps/`:
+
+- **Paperless** → its own `document_exporter` (documents + OCR text + tags + `manifest.json`).
+- **Immich** → a full database dump (albums/people/tags) plus any uploaded originals (regenerable
+  thumbnails and transcodes are skipped).
+
+Each lands beside a `RESTORE.txt` with the exact restore commands. This step is **best-effort**: if
+an app is stopped, `archive-backup` warns but the archive backup itself stays verified. Disable it
+with `BACKUP_APPS=false` in `/etc/archive-ingest.conf`; `archive-doctor` reports when the apps were
+last backed up.
+
 ---
 
 ## Settings

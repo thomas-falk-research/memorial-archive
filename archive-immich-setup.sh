@@ -145,6 +145,8 @@ cat <<EOF
     Notes:
       - The archive is mounted READ-ONLY: Immich can never alter or delete your masters.
       - App data lives in ${APP_DIR} (OS disk). Originals stay in ${ARCHIVE_ROOT} (+ your backup).
+      - 'archive-backup' also dumps Immich's database (albums/people/tags) and any uploaded
+        originals to /srv/backup/apps/immich, with a RESTORE.txt alongside.
       - If the mini-PC is low on RAM, disable the ML container:
           cd ${APP_DIR} && sudo docker compose stop immich-machine-learning
         (faces/smart-search stop; browsing and albums keep working.)
