@@ -36,9 +36,15 @@ Everything is config-driven, so it adapts to other disks, paths, networks, and d
 | 4 | `archive-serve-setup.sh` | Share the archive **read-only** on the local network so the family can browse it from the iPhone/iPad Files app (SMB). | regular user w/ sudo |
 | 5 | `archive-storage-setup.sh` | Mount the external archive disk and the backup target safely (via `fstab`, `nofail`), and run **verified backups**. Installs `archive-storage`, `archive-backup`. | regular user w/ sudo |
 | 6 | `archive-webui-setup.sh` | Let the family **keyword-search** the archive from a phone browser — the recoll web UI behind a password-protected Caddy proxy on the local network. | regular user w/ sudo |
+| 7 | `archive-immich-setup.sh` | *(optional, Docker)* Self-hosted **photos & videos** (Immich) with native iPhone/iPad apps; indexes the archive's photos **read-only, in place** (no copy). Serves on `:2283`. | regular user w/ sudo |
+| 8 | `archive-paperless-setup.sh` | *(optional, Docker)* **Document manager** (Paperless-ngx): OCRs, tags, and searches documents you drop into its `consume/` folder. Serves on `:8000`. | regular user w/ sudo |
 
 > Run the setup scripts as your **normal user** (the one with sudo) — *not* with `sudo ./script`.
 > They call `sudo` themselves where needed and must know your real home directory.
+>
+> Scripts 7–8 are optional family-facing apps (Docker Compose stacks). Their data lives on the OS
+> disk under `/srv/apps` (off the 2 TB archive budget); Immich references the archive read-only, so
+> the masters are never modified. Each is pinned to a specific upstream release and re-runnable.
 
 After `provision.sh`, authenticate the tools once: `sudo tailscale up` (for *your* remote admin
 and the off-site backup), then `gh auth login`.
