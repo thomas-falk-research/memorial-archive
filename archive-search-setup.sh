@@ -82,12 +82,12 @@ fi
 sudo -v
 
 log "Installing core packages"
-sudo apt-get update -y
-sudo apt-get install -y "${CORE_PKGS[@]}"
+sudo DEBIAN_FRONTEND=noninteractive apt-get update -y
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${CORE_PKGS[@]}"
 
 log "Installing best-effort extras (skipped individually if missing)"
 for pkg in "${BEST_EFFORT_PKGS[@]}"; do
-  if sudo apt-get install -y "$pkg" >/dev/null 2>&1; then info "installed: $pkg"
+  if sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "$pkg" >/dev/null 2>&1; then info "installed: $pkg"
   else warn "unavailable on this release: $pkg (skipped)"; SKIPPED+=("$pkg"); fi
 done
 

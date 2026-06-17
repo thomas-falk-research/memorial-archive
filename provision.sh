@@ -58,8 +58,8 @@ sudo -v   # prime sudo; subsequent calls reuse the cached credential
 # ----------------------------------------------------------------------------------------------
 base_and_locale() {
   log "Updating apt and installing base utilities + locales"
-  sudo apt-get update -y
-  sudo apt-get install -y \
+  sudo DEBIAN_FRONTEND=noninteractive apt-get update -y
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
     ca-certificates curl wget gnupg lsb-release \
     build-essential pkg-config git \
     jq unzip zip tree rsync tmux htop vim \
@@ -155,7 +155,7 @@ Signed-By: /etc/apt/keyrings/githubcli-archive-keyring.gpg
 EOF
 
   log "Refreshing apt with the new repositories"
-  sudo apt-get update -y
+  sudo DEBIAN_FRONTEND=noninteractive apt-get update -y
 }
 
 # ----------------------------------------------------------------------------------------------
@@ -163,7 +163,7 @@ EOF
 # ----------------------------------------------------------------------------------------------
 install_docker() {
   log "Installing Docker Engine, Buildx, and Compose v2"
-  sudo apt-get install -y \
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
     docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
   sudo systemctl enable --now docker
 
@@ -181,7 +181,7 @@ install_docker() {
 # ----------------------------------------------------------------------------------------------
 install_tailscale() {
   log "Installing Tailscale"
-  sudo apt-get install -y tailscale tailscale-archive-keyring
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y tailscale tailscale-archive-keyring
   sudo systemctl enable --now tailscaled
   info "Authenticate the node when ready:  sudo tailscale up"
 }
@@ -191,7 +191,7 @@ install_tailscale() {
 # ----------------------------------------------------------------------------------------------
 install_gh() {
   log "Installing GitHub CLI"
-  sudo apt-get install -y gh
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y gh
   info "Authenticate later with:  gh auth login"
 }
 
@@ -200,7 +200,7 @@ install_gh() {
 # ----------------------------------------------------------------------------------------------
 install_ansible() {
   log "Installing Ansible via pipx"
-  sudo apt-get install -y pipx
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y pipx
   pipx ensurepath >/dev/null
   export PATH="${HOME}/.local/bin:${PATH}"
   if pipx list --short 2>/dev/null | grep -qx ansible; then
@@ -255,7 +255,9 @@ install_go() {
   [[ -n "${sum}" && "${sum}" != "null" ]] || die "Could not find published SHA256 for ${tarball}."
 
   tmp="$(mktemp -d)"
-  trap 'rm -rf "${tmp}"' RETURN
+  # ${tmp:-}: this RETURN trap also fires when later functions (e.g. main) return, where 'tmp'
+  # is out of scope — the :- keeps it from tripping 'set -u' (rm -rf "" is a harmless no-op).
+  trap 'rm -rf "${tmp:-}"' RETURN
   curl -fsSL "${url}" -o "${tmp}/${tarball}"
   echo "${sum}  ${tmp}/${tarball}" | sha256sum -c -   # aborts (set -e) if the checksum mismatches
 
@@ -275,7 +277,7 @@ install_chromium() {
   [[ "${INSTALL_CHROMIUM}" == "true" ]] || { info "Skipping Chromium (disabled in config)."; return 0; }
   log "Installing Chromium (snap)"
   if ! command -v snap >/dev/null 2>&1; then
-    sudo apt-get install -y snapd
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y snapd
   fi
   if snap list chromium >/dev/null 2>&1; then
     info "Chromium snap already installed."
@@ -289,7 +291,7 @@ install_chromium() {
 # ----------------------------------------------------------------------------------------------
 configure_ssh() {
   log "Installing and hardening OpenSSH server"
-  sudo apt-get install -y openssh-server
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-server
 
   local pwauth="yes"
   [[ "${SSH_DISABLE_PASSWORD_AUTH}" == "true" ]] && pwauth="no"
@@ -325,13 +327,13 @@ EOF
 # ----------------------------------------------------------------------------------------------
 security_baseline() {
   log "Enabling unattended security upgrades"
-  sudo apt-get install -y unattended-upgrades
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y unattended-upgrades
   echo 'APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";' | sudo tee /etc/apt/apt.conf.d/20auto-upgrades >/dev/null
 
   if [[ "${ENABLE_FIREWALL}" == "true" ]]; then
     log "Configuring ufw (deny inbound; allow SSH + tailnet)"
-    sudo apt-get install -y ufw
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ufw
     sudo ufw default deny incoming
     sudo ufw default allow outgoing
     sudo ufw allow OpenSSH
