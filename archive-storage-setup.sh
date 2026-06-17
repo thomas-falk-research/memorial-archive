@@ -112,7 +112,7 @@ if [[ "$REQUIRE_SEPARATE_BACKUP" == "true" ]]; then
 fi
 
 note "Measuring the archive (can take a moment on large drives)..."
-src_bytes="$(du -sb --exclude='.recoll' --exclude='.plocate.db' "$ARCHIVE_ROOT" 2>/dev/null | cut -f1)"; src_bytes="${src_bytes:-0}"
+src_bytes="$(du -sb --exclude='lost+found' --exclude='.recoll' --exclude='.plocate.db' "$ARCHIVE_ROOT" 2>/dev/null | cut -f1)"; src_bytes="${src_bytes:-0}"
 avail="$(df -PB1 "$BACKUP_ROOT" | awk 'NR==2{print $4}')"; avail="${avail:-0}"
 floor=$(( MIN_FREE_GIB * 1024 * 1024 * 1024 ))
 echo "Archive size: $(h "$src_bytes")    Backup free: $(h "$avail")    (floor: ${MIN_FREE_GIB} GiB)"
@@ -141,7 +141,7 @@ fi
 note "Copying (rsync, additive)..." | tee "$logf"
 set +e
 # --delete is intentionally NOT used: the backup never loses data; index dirs are rebuildable/excluded.
-rsync "${rsync_flags[@]}" --info=progress2 --exclude='.recoll' --exclude='.plocate.db' --exclude='.archive-backup.*.log' \
+rsync "${rsync_flags[@]}" --info=progress2 --exclude='lost+found' --exclude='.recoll' --exclude='.plocate.db' --exclude='.archive-backup.*.log' \
   "$ARCHIVE_ROOT"/ "$BACKUP_ROOT"/ 2>&1 | tee -a "$logf"
 rc=${PIPESTATUS[0]}
 set -e
