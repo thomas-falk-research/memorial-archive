@@ -190,8 +190,10 @@ install_apfs() {
   local d; d="$(mktemp -d)"
   run "Cloning apfs-fuse source" \
       git clone --recursive --depth 1 https://github.com/sgan81/apfs-fuse "${d}/apfs-fuse" || { rm -rf "${d}"; return 1; }
+  # CMake 4 (Ubuntu 26.04) dropped support for apfs-fuse's old cmake_minimum_required; the policy
+  # floor lets its CMakeLists configure anyway (CMake's own suggested workaround).
   run "Compiling apfs-fuse (1-2 minutes)" \
-      bash -c "cd '${d}/apfs-fuse' && mkdir build && cd build && cmake .. && make -j\"\$(nproc)\" && sudo make install" \
+      bash -c "cd '${d}/apfs-fuse' && mkdir build && cd build && cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5 .. && make -j\"\$(nproc)\" && sudo make install" \
       || { rm -rf "${d}"; return 1; }
   rm -rf "${d}"
   info "Built apfs-fuse (upstream is unversioned; record the commit if you need reproducibility)."
