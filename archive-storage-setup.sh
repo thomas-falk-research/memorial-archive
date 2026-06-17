@@ -128,17 +128,30 @@ if [[ -t 0 ]]; then
 fi
 
 logf="${BACKUP_ROOT}/.archive-backup.$(date +%Y%m%d-%H%M%S).log"
+# Pick rsync flags by destination type. SMB/CIFS can't store Unix permissions, ownership, ACLs or
+# xattrs, so -aHAX would error there; on CIFS copy contents + timestamps (and symlinks when the
+# share is mounted with mfsymlinks). The SHA-256 manifest check below is authoritative either way.
+dest_fstype="$(findmnt -no FSTYPE -T "$BACKUP_ROOT" 2>/dev/null || echo unknown)"
+if [[ "$dest_fstype" == cifs || "$dest_fstype" == smb3 ]]; then
+  rsync_flags=(-rlt --modify-window=2)
+  note "Backup target is ${dest_fstype}: copying contents + timestamps (SMB can't hold Unix metadata)."
+else
+  rsync_flags=(-aHAX)
+fi
 note "Copying (rsync, additive)..." | tee "$logf"
 set +e
-# --delete is intentionally NOT used: the backup never loses data. The index dirs are rebuildable
-# and excluded. -aHAX preserves the same metadata as the ingest copies.
-rsync -aHAX --info=progress2 --exclude='.recoll' --exclude='.plocate.db' --exclude='.archive-backup.*.log' \
+# --delete is intentionally NOT used: the backup never loses data; index dirs are rebuildable/excluded.
+rsync "${rsync_flags[@]}" --info=progress2 --exclude='.recoll' --exclude='.plocate.db' --exclude='.archive-backup.*.log' \
   "$ARCHIVE_ROOT"/ "$BACKUP_ROOT"/ 2>&1 | tee -a "$logf"
 rc=${PIPESTATUS[0]}
 set -e
-if [[ $rc -ne 0 && $rc -ne 24 ]]; then
-  err "rsync exit $rc — backup may be incomplete. See $logf. NOT marking this backup as verified."
-  exit 1
+# On CIFS, rc 23 (some attributes not transferred) is expected and non-fatal — the manifest check is
+# the real gate. On other filesystems, only 0 and 24 are acceptable.
+if [[ "$dest_fstype" == cifs || "$dest_fstype" == smb3 ]]; then
+  [[ $rc -ne 0 && $rc -ne 23 && $rc -ne 24 ]] && { err "rsync exit $rc — backup may be incomplete. See $logf."; exit 1; }
+  [[ $rc -eq 23 ]] && warn "rsync 23 on SMB: some attributes weren't copied (expected; contents are verified next)."
+else
+  [[ $rc -ne 0 && $rc -ne 24 ]] && { err "rsync exit $rc — backup may be incomplete. See $logf. NOT marking verified."; exit 1; }
 fi
 [[ $rc -eq 24 ]] && warn "rsync 24: some files vanished during copy (usually harmless for a static archive)."
 
@@ -300,7 +313,7 @@ attach_backup() {
        local cred=/etc/archive-backup.cred
        printf 'username=%s\npassword=%s\n' "$smbu" "$smbp" | sudo tee "$cred" >/dev/null
        sudo chmod 600 "$cred"
-       apply_fstab_line "$BACKUP_ROOT" "${unc} ${BACKUP_ROOT} cifs credentials=${cred},nofail,_netdev,uid=$(id -u),gid=$(id -g),file_mode=0644,dir_mode=0755 0 0" ;;
+       apply_fstab_line "$BACKUP_ROOT" "${unc} ${BACKUP_ROOT} cifs credentials=${cred},nofail,_netdev,uid=$(id -u),gid=$(id -g),file_mode=0644,dir_mode=0755,mfsymlinks 0 0" ;;
     q|Q) return 0 ;;
     *) err "Invalid choice."; return 1 ;;
   esac
