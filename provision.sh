@@ -125,10 +125,21 @@ Architectures: ${ARCH}
 Signed-By: /etc/apt/keyrings/docker.asc
 EOF
 
-  # --- Tailscale --- (key file is per-codename too, so fetch it for the resolved suite)
-  if [[ ! -f /usr/share/keyrings/tailscale-archive-keyring.gpg ]]; then
-    curl -fsSL "https://pkgs.tailscale.com/stable/ubuntu/${tailscale_suite}.noarmor.gpg" \
-      | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
+  # --- Tailscale --- (the keyring is per-codename, so re-fetch it whenever the resolved suite
+  # changes — otherwise a box first provisioned on an older suite keeps a key apt can't verify the
+  # new suite with. Download to a temp file and only swap it in on success, so a transient network
+  # failure on a re-run never clobbers a working key.)
+  local ts_key=/usr/share/keyrings/tailscale-archive-keyring.gpg
+  local ts_key_suite=/usr/share/keyrings/.tailscale-keyring-suite
+  if [[ ! -f "$ts_key" ]] || [[ "$(sudo cat "$ts_key_suite" 2>/dev/null || true)" != "$tailscale_suite" ]]; then
+    local ts_tmp; ts_tmp="$(mktemp)"
+    if curl -fsSL "https://pkgs.tailscale.com/stable/ubuntu/${tailscale_suite}.noarmor.gpg" -o "$ts_tmp" && [[ -s "$ts_tmp" ]]; then
+      sudo install -m 0644 "$ts_tmp" "$ts_key"
+      printf '%s\n' "$tailscale_suite" | sudo tee "$ts_key_suite" >/dev/null
+    else
+      warn "Could not fetch the Tailscale keyring for '${tailscale_suite}'; keeping the existing key."
+    fi
+    rm -f "$ts_tmp"
   fi
   sudo tee /etc/apt/sources.list.d/tailscale.sources >/dev/null <<EOF
 Types: deb
