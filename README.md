@@ -11,6 +11,29 @@ an unexpected loss. The scripts are deliberately conservative: they read source 
 
 ---
 
+## Start here: one menu — `./manage.sh`
+
+You don't have to remember any of the script names below. From this folder, run:
+
+```
+./manage.sh          # (or:  bash manage.sh )
+```
+
+It's a guided menu for the whole system:
+
+- **Check health** — verify everything (runs `archive-doctor`).
+- **Install / set up** — runs the steps below in order, asking before each one.
+- **Update** — `git pull` the latest, then safely refresh what's installed. Passwords, settings, and
+  data are preserved; app versions advance to the latest.
+- **Reinstall / repair** — re-run setup to fix a broken command/service, without changing versions.
+- **Uninstall** — removes the tools only; it **never** touches your archive (`/srv/archive`) or backups.
+- **Everyday tasks** — ingest a drive, rebuild the search index, run a verified backup, show storage.
+
+Run it as your normal user (the one with sudo) — *not* with `sudo`. Everything below still works on
+its own for advanced use; the menu just drives it for you.
+
+---
+
 ## The machine and storage
 
 - A dedicated mini-PC running **Ubuntu 26.04 LTS** (desktop).
