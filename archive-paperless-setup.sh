@@ -59,6 +59,10 @@ if [[ -z "$PAPERLESS_VERSION" ]]; then
     | awk -F/ '{print $NF}' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)"
   [[ -n "$PAPERLESS_VERSION" ]] || { PAPERLESS_VERSION="$FALLBACK_VERSION"; warn "Release lookup failed; using ${PAPERLESS_VERSION}."; }
 fi
+# Git release tags are vX.Y.Z, but the container image tag drops the leading 'v' (e.g. 2.20.15).
+# Keep the git ref (with 'v') for the compose/env downloads; use the image tag (no 'v') for the pin.
+PAPERLESS_VERSION="v${PAPERLESS_VERSION#v}"
+IMAGE_TAG="${PAPERLESS_VERSION#v}"
 
 host_short="$(hostname -s 2>/dev/null || hostname)"
 lan_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
@@ -123,7 +127,7 @@ sudo tee "$APP_DIR/docker-compose.override.yml" >/dev/null <<EOF
 # Managed by archive-paperless-setup.sh — pin the image and the published port.
 services:
   webserver:
-    image: ghcr.io/paperless-ngx/paperless-ngx:${PAPERLESS_VERSION}
+    image: ghcr.io/paperless-ngx/paperless-ngx:${IMAGE_TAG}
     ports:
       - "${PAPERLESS_PORT}:8000"
 EOF
