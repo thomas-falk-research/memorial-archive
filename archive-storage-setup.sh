@@ -188,10 +188,12 @@ backup_apps() {
         sz="$(stat -c%s "$dumpf" 2>/dev/null || echo 0)"
         if gzip -t "$dumpf" 2>/dev/null && (( sz > 1024 )); then
           mkdir -p "$appdst/immich"
-          if rsync -rlt --modify-window=2 "$dumpf" "$appdst/immich/" >>"$logf" 2>&1; then
+          local drc
+          rsync -rlt --modify-window=2 "$dumpf" "$appdst/immich/" >>"$logf" 2>&1; drc=$?
+          if [[ $drc -eq 0 || $drc -eq 23 || $drc -eq 24 ]]; then   # tolerate CIFS rc 23/24 like the others
             ok "  Immich: database dumped, verified ($(h "$sz")) and copied."
           else
-            err "  Immich: copying the DB dump to the backup failed."; rc_any=1
+            err "  Immich: copying the DB dump to the backup failed (rsync rc=$drc)."; rc_any=1
           fi
         else
           err "  Immich: the DB dump failed its integrity test or was empty — not trusting it."; rc_any=1
@@ -290,7 +292,10 @@ set +e
 rsync "${rsync_flags[@]}" --info=progress2 --exclude='lost+found' --exclude='.recoll' --exclude='.plocate.db' --exclude='.archive-backup.*.log' \
   "$ARCHIVE_ROOT"/ "$BACKUP_ROOT"/ 2>&1 | tee -a "$logf"
 rc=${PIPESTATUS[0]}
-set -e
+# Keep errexit OFF here (this script's header is 'set -uo pipefail', not -e, and it checks every exit
+# status explicitly). Re-enabling -e would make the best-effort app-data backup below abort the WHOLE
+# run when its rsync returns 23/24 on CIFS — exactly the case the design says we must tolerate.
+set +e
 # On CIFS, rc 23 (some attributes not transferred) is expected and non-fatal — the manifest check is
 # the real gate. On other filesystems, only 0 and 24 are acceptable.
 if [[ "$dest_fstype" == cifs || "$dest_fstype" == smb3 ]]; then
@@ -313,14 +318,29 @@ while IFS= read -r m; do
   fi
 done < <(find "$BACKUP_ROOT/incoming" -mindepth 2 -name SHA256SUMS 2>/dev/null | sort)
 
-if [[ $checked -eq 0 ]]; then
+# Completeness, not just self-consistency: "verified" must mean every SOURCE copy is present AND
+# verifiable at the destination — otherwise a copy (or just its manifest) that never transferred
+# would be invisible to the loop above and the backup would still be blessed. So also compare the
+# source copy count, and flag any destination copy folder that arrived WITHOUT a manifest.
+src_copies="$(find "$ARCHIVE_ROOT/incoming" -mindepth 2 -name SHA256SUMS 2>/dev/null | wc -l)"
+dest_nomanifest="$(find "$BACKUP_ROOT/incoming" -mindepth 2 -maxdepth 2 -type d \
+  \! -exec test -e '{}/SHA256SUMS' \; -print 2>/dev/null | wc -l)"
+
+if (( checked == 0 && src_copies == 0 )); then
   warn "No SHA256SUMS manifests found at the destination to verify (nothing ingested yet?)."
-elif [[ $vrc -eq 0 ]]; then
-  ok "Backup verified: $checked copies match their manifests."
-  printf '%s  verified %s copy(ies)\n' "$(date -Is)" "$checked" > "$BACKUP_ROOT/.archive-backup.verified" 2>/dev/null || true
-else
+elif (( vrc != 0 )); then
   err "One or more backed-up copies FAILED verification. Re-run the backup; do not trust it yet."
   exit 1
+elif (( checked < src_copies )); then
+  err "Backup INCOMPLETE: ${src_copies} verified copy(ies) in the archive but only ${checked} verifiable at the backup."
+  err "A copy (or its manifest) did not transfer. Re-run the backup; NOT marking it verified."
+  exit 1
+elif (( dest_nomanifest > 0 )); then
+  err "Backup has ${dest_nomanifest} copy folder(s) with NO manifest — unverifiable. Re-run; NOT marking verified."
+  exit 1
+else
+  ok "Backup verified: $checked copy(ies) match their manifests (all ${src_copies} archive copies present)."
+  printf '%s  verified %s of %s copy(ies)\n' "$(date -Is)" "$checked" "$src_copies" > "$BACKUP_ROOT/.archive-backup.verified" 2>/dev/null || true
 fi
 
 # The archive itself is now safely backed up and verified. Additionally fold in the family apps'
@@ -463,8 +483,11 @@ attach_backup() {
        [[ -n "$unc" ]] || { err "No share given."; return 1; }
        read -rp "SMB username: " smbu; read -rsp "SMB password: " smbp; echo
        local cred=/etc/archive-backup.cred
+       # Create the secret already-private (0600) so it is never world-readable, even briefly; tee
+       # truncates the content but leaves the mode intact, so there is no chmod race.
+       sudo install -m 0600 /dev/null "$cred"
        printf 'username=%s\npassword=%s\n' "$smbu" "$smbp" | sudo tee "$cred" >/dev/null
-       sudo chmod 600 "$cred"; unset smbu smbp
+       unset smbu smbp
        # If the mount fails, apply_fstab_line rolls back fstab — also remove the password file it
        # would otherwise leave behind (a root-only secret with no entry referencing it).
        if ! apply_fstab_line "$BACKUP_ROOT" "${unc} ${BACKUP_ROOT} cifs credentials=${cred},nofail,_netdev,uid=$(id -u),gid=$(id -g),file_mode=0644,dir_mode=0755,mfsymlinks 0 0"; then
