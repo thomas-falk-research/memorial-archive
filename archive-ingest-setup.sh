@@ -451,11 +451,20 @@ if [[ "$REQUIRE_MOUNTED_DEST" == "true" ]]; then
 fi
 
 note "Scanning source (can take a moment on large drives)..."
-src_files="$(find "$src" -type f 2>/dev/null | wc -l)"
+# Count files NUL-safely: a newline in a filename must not inflate the count, because this number is
+# the completeness GATE below (not just a display value).
+src_files="$(find "$src" -type f -printf 'x' 2>/dev/null | wc -c)"
 src_bytes="$(du -sb "$src" 2>/dev/null | cut -f1)"; src_bytes="${src_bytes:-0}"
 if [[ "${src_files:-0}" -eq 0 ]]; then
   err "Source has 0 files: $src"
   err "Is the drive actually mounted there?  Check:  ls -la '$src'"
+  exit 1
+fi
+# Any real tree has a non-zero apparent size (the directories alone count), so src_bytes==0 here means
+# 'du' could not read the source — refuse rather than run the free-space check blind.
+if (( src_bytes == 0 )); then
+  err "Could not measure the source size ('du' failed) — refusing to ingest without a reliable"
+  err "free-space check. Confirm the source is readable:  du -sh '$src'"
   exit 1
 fi
 echo "Source: $src_files files, $(h "$src_bytes")"
@@ -472,18 +481,22 @@ if (( avail < need + floor )); then
 fi
 echo "Destination free: $(h "$avail") (keeping >= ${MIN_FREE_GIB} GiB free) — sufficient."
 
-dest="${dest_parent}/$(date +%Y%m%d-%H%M%S)"; mkdir -p "$dest"
+dest="${dest_parent}/$(date +%Y%m%d-%H%M%S)"
+# Payload goes in data/; our own SHA256SUMS / PROVENANCE.txt / .INCOMPLETE live one level up in
+# $dest. So a SOURCE file literally named SHA256SUMS (etc.) can never collide with or be shadowed by
+# the tool's metadata, and EVERY source file gets hashed. (Same idea as a BagIt 'data/' payload dir.)
+data="${dest}/data"; mkdir -p "$data"
 marker="${dest}/.INCOMPLETE"; : > "$marker"
 logf="${dest}.ingest.log"
 
 if [[ -t 0 ]]; then
   read -rp "Copy $(h "$src_bytes") into $dest ? [y/N] " yn
-  [[ "$yn" =~ ^[Yy] ]] || { echo "Cancelled."; rm -f "$marker"; rmdir "$dest" 2>/dev/null || true; exit 0; }
+  [[ "$yn" =~ ^[Yy] ]] || { echo "Cancelled."; rm -rf "$dest" 2>/dev/null || true; exit 0; }
 fi
 
 echo "Copying..." | tee "$logf"
 set +e
-rsync -aHAX --info=progress2 "$src"/ "$dest"/ 2>&1 | tee -a "$logf"
+rsync -aHAX --info=progress2 "$src"/ "$data"/ 2>&1 | tee -a "$logf"
 rc=${PIPESTATUS[0]}
 set -e
 if [[ $rc -ne 0 && $rc -ne 24 ]]; then
@@ -495,12 +508,18 @@ fi
 [[ $rc -eq 24 ]] && warn "rsync 24: some files vanished during copy (usually harmless for static media)."
 
 manifest="${dest}/SHA256SUMS"
-( cd "$dest" && find . -type f ! -name 'SHA256SUMS' ! -name '.INCOMPLETE' ! -name 'PROVENANCE.txt' \
-    -print0 | sort -z | xargs -0 -r sha256sum ) > "$manifest"
+# Hash the entire payload. Because the payload lives under data/ (and the manifest does not), nothing
+# needs to be excluded — every copied file is covered by fixity.
+( cd "$dest" && find data -type f -print0 | sort -z | xargs -0 -r sha256sum ) > "$manifest"
 copied="$(wc -l < "$manifest")"
 echo "Manifest: $manifest ($copied files)" | tee -a "$logf"
+# HARD completeness gate: the copy is trustworthy only if every source file was copied AND hashed.
+# On mismatch we leave .INCOMPLETE in place and refuse — a partial master must never look complete.
 if [[ "$copied" -ne "$src_files" ]]; then
-  warn "File-count mismatch: source $src_files vs copied $copied. Investigate before trusting."
+  err "INCOMPLETE COPY: source has ${src_files} file(s) but ${copied} were copied and hashed."
+  err "Left marked .INCOMPLETE (NOT trusted). Re-run from source; if the drive is failing, image it"
+  err "with ddrescue first and ingest the image. See ${logf}."
+  exit 1
 fi
 
 echo "Verifying copy against manifest..." | tee -a "$logf"
@@ -517,6 +536,7 @@ ingested_at:  $(date -Is)
 ingested_by:  $(id -un)@$(hostname -s)
 file_count:   ${copied}
 byte_count:   ${src_bytes}
+payload:      data/  (SHA256SUMS covers every file under data/)
 tool:         ingest-verify (rsync -aHAX + sha256)
 EOF
 
@@ -552,8 +572,13 @@ command -v sha256sum >/dev/null 2>&1 || { err "sha256sum not found."; exit 1; }
 
 verify_one() {  # $1 = directory containing SHA256SUMS
   local d="$1" out vrc
+  # A copy still marked .INCOMPLETE was never finished; its manifest was built from partial data and
+  # would 'pass' against itself. Treat it as a FAILURE, never a warning — it must never read as good.
+  if [[ -f "$d/.INCOMPLETE" ]]; then
+    err "FAILED: $d is marked .INCOMPLETE (never fully ingested) — not a trusted copy."
+    return 1
+  fi
   [[ -f "$d/SHA256SUMS" ]] || { warn "No manifest in $d (skipping)"; return 0; }
-  [[ -f "$d/.INCOMPLETE" ]] && warn "$d is marked .INCOMPLETE (was never fully ingested)"
   printf 'Verifying %s ... ' "$d"
   out="$( cd "$d" && sha256sum -c SHA256SUMS 2>&1 )"; vrc=$?
   if [[ $vrc -eq 0 ]]; then ok "OK"; return 0; fi
