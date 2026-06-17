@@ -75,7 +75,7 @@ hdr "Storage"
 if [[ -d "$ARCHIVE_ROOT" ]] && is_sep_mount "$ARCHIVE_ROOT"; then
   src="$(findmnt -no SOURCE -T "$ARCHIVE_ROOT" 2>/dev/null)"
   avail="$(df -PB1 "$ARCHIVE_ROOT" 2>/dev/null | awk 'NR==2{print $4}')"; avail="${avail:-0}"
-  used_b="$(du -sb --exclude='lost+found' --exclude='.recoll' --exclude='.plocate.db' "$ARCHIVE_ROOT" 2>/dev/null | cut -f1)"; used_b="${used_b:-0}"
+  used_b="$(du -sb --exclude='lost+found' --exclude='.recoll' --exclude='.plocate.db' --exclude='.derived' "$ARCHIVE_ROOT" 2>/dev/null | cut -f1)"; used_b="${used_b:-0}"
   used_g=$(( used_b / 1024 / 1024 / 1024 ))
   ok "Archive on its own volume (${src}); ${used_g} GiB used, $(human "$avail") free."
   if   (( used_g >= MAX_ARCHIVE_GIB ));            then no "Archive is OVER the ${MAX_ARCHIVE_GIB} GiB soft cap."; fix "stop ingesting, or raise MAX_ARCHIVE_GIB / add storage"

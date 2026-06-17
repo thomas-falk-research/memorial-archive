@@ -110,7 +110,7 @@ sudo tee "$MANAGED" >/dev/null <<EOF
    force group = ${SERVE_GROUP}
    create mask = 0444
    directory mask = 0555
-   veto files = /.INCOMPLETE/
+   veto files = /.INCOMPLETE/SHA256SUMS/PROVENANCE.txt/*.ingest.log/
 EOF
 
 # Idempotently include our managed file from the main smb.conf (back it up once).
