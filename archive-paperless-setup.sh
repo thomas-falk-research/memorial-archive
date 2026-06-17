@@ -177,7 +177,8 @@ cat <<EOF
 
     Notes:
       - App data + the database are Docker-managed volumes on the OS disk (off the archive budget).
-        Back them up later with Paperless's own exporter if you want the tags/metadata preserved.
+        'archive-backup' backs them up automatically — Paperless's own exporter (documents + tags)
+        into /srv/backup/apps/paperless, with a RESTORE.txt alongside.
       - If you reach it by IP/Tailscale and hit a login/CSRF error, set PAPERLESS_URL in
         ${APP_DIR}/docker-compose.env to that address and 'sudo docker compose up -d'.
       - Manage:  cd ${APP_DIR} && sudo docker compose [ps|logs -f|restart|down]

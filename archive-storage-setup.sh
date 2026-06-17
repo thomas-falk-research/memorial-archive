@@ -83,6 +83,12 @@ ARCHIVE_ROOT="${ARCHIVE_ROOT:-/srv/archive}"
 BACKUP_ROOT="${BACKUP_ROOT:-/srv/backup}"
 MIN_FREE_GIB="${MIN_FREE_GIB:-10}"
 REQUIRE_SEPARATE_BACKUP="${REQUIRE_SEPARATE_BACKUP:-true}"
+# Family apps keep their OWN data outside the archive (Paperless documents/tags, Immich DB +
+# any uploaded originals). archive-backup also dumps these, best-effort, under $BACKUP_ROOT/apps.
+APPS_ROOT="${APPS_ROOT:-/srv/apps}"
+IMMICH_DIR="${IMMICH_DIR:-$APPS_ROOT/immich}"
+PAPERLESS_DIR="${PAPERLESS_DIR:-$APPS_ROOT/paperless}"
+BACKUP_APPS="${BACKUP_APPS:-true}"
 
 c_red=$'\033[1;31m'; c_grn=$'\033[1;32m'; c_yel=$'\033[1;33m'; c_cyn=$'\033[0;36m'; c_rst=$'\033[0m'
 ok()   { printf '%s%s%s\n' "$c_grn" "$*" "$c_rst"; }
@@ -90,6 +96,143 @@ note() { printf '%s%s%s\n' "$c_cyn" "$*" "$c_rst"; }
 warn() { printf '%sWARN:%s %s\n'  "$c_yel" "$c_rst" "$*" >&2; }
 err()  { printf '%sERROR:%s %s\n' "$c_red" "$c_rst" "$*" >&2; }
 h() { numfmt --to=iec "${1:-0}" 2>/dev/null || printf '%sB' "${1:-0}"; }
+
+# ---- restore instructions written beside each dump (a backup you can't restore is worthless) --
+write_restore_paperless() {
+  mkdir -p "$1"
+  cat > "$1/RESTORE.txt" <<'TXT'
+Restoring Paperless documents, tags and metadata
+=================================================
+This 'export/' folder was produced by Paperless-ngx's own document_exporter; it contains your
+original documents, their OCR text, tags and metadata (manifest.json). To restore into a fresh
+Paperless install on the box:
+
+  1. Set Paperless up again:   ./manage.sh  ->  Install  ->  Documents (Paperless)
+  2. Copy this 'export/' folder back to  /srv/apps/paperless/export  on the box.
+  3. Import it:
+       cd /srv/apps/paperless
+       sudo docker compose exec -T webserver document_importer ../export
+
+(Adjust the path if you changed APPS_ROOT.)  Docs: https://docs.paperless-ngx.com/administration/
+TXT
+}
+write_restore_immich() {
+  mkdir -p "$1"
+  cat > "$1/RESTORE.txt" <<'TXT'
+Restoring Immich (albums, people/faces, tags + any uploaded originals)
+======================================================================
+'immich-database.sql.gz' is a full PostgreSQL dump (your albums, people, tags). 'files/' holds any
+user-uploaded originals and profile images (thumbnails/transcodes were NOT backed up — Immich
+regenerates them). The deceased's photos themselves live in the read-only archive, not here.
+
+  *** Versions matter — check Immich's current restore guide first: ***
+      https://immich.app/docs/administration/backup-and-restore
+
+  1. Set Immich up again:   ./manage.sh  ->  Install  ->  Photos (Immich)
+  2. Restore uploaded originals: copy this 'files/' back into Immich's UPLOAD_LOCATION
+     (default /srv/apps/immich/library), keeping its subfolders (library/, upload/, profile/).
+  3. Restore the database (the DB here is a bind-mount, not a named volume):
+       cd /srv/apps/immich
+       sudo docker compose down
+       sudo rm -rf /srv/apps/immich/postgres/*
+       sudo docker compose up -d database
+       sleep 10
+       gunzip < immich-database.sql.gz | sudo docker compose exec -T database psql --username=postgres
+       sudo docker compose up -d
+
+(Adjust the paths if you changed APPS_ROOT.)
+TXT
+}
+
+# ---- app data backup (best-effort; never fails or un-verifies the archive backup above) -------
+# Immich and Paperless keep state OUTSIDE the archive, so backing up /srv/archive alone cannot
+# rebuild them. This dumps each INSTALLED app's own data under $BACKUP_ROOT/apps/. Any problem here
+# is a loud WARNING only: the archive backup stays the primary signal and remains verified.
+backup_apps() {
+  [[ "$BACKUP_APPS" == "true" ]] || { note "App-data backup is disabled (BACKUP_APPS=false)."; return 0; }
+  command -v docker >/dev/null 2>&1 || return 0   # no docker -> no family apps to back up
+
+  local appdst="$BACKUP_ROOT/apps" any=false rc_any=0
+
+  # --- Paperless: its own exporter preserves documents + OCR text + tags + manifest.json --------
+  if [[ -f "$PAPERLESS_DIR/docker-compose.yml" ]]; then
+    any=true
+    note "Backing up Paperless (document_exporter)..."
+    if ( cd "$PAPERLESS_DIR" && sudo docker compose exec -T webserver document_exporter ../export ) >>"$logf" 2>&1; then
+      mkdir -p "$appdst/paperless"
+      local prc
+      rsync -rlt --modify-window=2 "$PAPERLESS_DIR/export/" "$appdst/paperless/export/" >>"$logf" 2>&1
+      prc=$?
+      if [[ $prc -eq 0 || $prc -eq 23 || $prc -eq 24 ]] && [[ -s "$appdst/paperless/export/manifest.json" ]]; then
+        ok "  Paperless: documents + tags exported and copied (manifest verified)."
+        write_restore_paperless "$appdst/paperless"
+      else
+        err "  Paperless: export backup failed (rsync rc=$prc, or manifest.json missing)."; rc_any=1
+      fi
+    else
+      err "  Paperless: could not run document_exporter (is the 'webserver' container up?)."; rc_any=1
+    fi
+  fi
+
+  # --- Immich: database dump (albums/people/tags) + uploaded originals (minus regenerables) -----
+  if [[ -f "$IMMICH_DIR/docker-compose.yml" ]]; then
+    any=true
+    note "Backing up Immich (database dump + uploaded originals)..."
+    if ! command -v gzip >/dev/null 2>&1; then
+      err "  Immich: gzip not found — cannot compress the DB dump."; rc_any=1
+    else
+      local dbuser tmp dumpf sz
+      dbuser="$(sudo sed -n 's/^DB_USERNAME=//p' "$IMMICH_DIR/.env" 2>/dev/null | head -1)"; dbuser="${dbuser:-postgres}"
+      tmp="$(mktemp -d)"; dumpf="$tmp/immich-database.sql.gz"
+      if ( cd "$IMMICH_DIR" && sudo docker compose exec -T database pg_dumpall --clean --if-exists --username="$dbuser" ) 2>>"$logf" | gzip > "$dumpf"; then
+        sz="$(stat -c%s "$dumpf" 2>/dev/null || echo 0)"
+        if gzip -t "$dumpf" 2>/dev/null && (( sz > 1024 )); then
+          mkdir -p "$appdst/immich"
+          if rsync -rlt --modify-window=2 "$dumpf" "$appdst/immich/" >>"$logf" 2>&1; then
+            ok "  Immich: database dumped, verified ($(h "$sz")) and copied."
+          else
+            err "  Immich: copying the DB dump to the backup failed."; rc_any=1
+          fi
+        else
+          err "  Immich: the DB dump failed its integrity test or was empty — not trusting it."; rc_any=1
+        fi
+      else
+        err "  Immich: could not dump the database (is the 'database' container up?)."; rc_any=1
+      fi
+      rm -rf "$tmp"
+    fi
+
+    # Uploaded originals + profile images. Immich writes these as root, so read them with sudo;
+    # thumbs/ and encoded-video/ are skipped because Immich regenerates them on demand.
+    local upl irc
+    upl="$(sudo sed -n 's/^UPLOAD_LOCATION=//p' "$IMMICH_DIR/.env" 2>/dev/null | head -1)"; upl="${upl:-$IMMICH_DIR/library}"
+    if sudo test -d "$upl"; then
+      mkdir -p "$appdst/immich/files"
+      { sudo rsync -rlt --modify-window=2 --exclude='thumbs/' --exclude='encoded-video/' "$upl/" "$appdst/immich/files/"; } >>"$logf" 2>&1
+      irc=$?
+      if [[ $irc -eq 0 || $irc -eq 23 || $irc -eq 24 ]]; then
+        ok "  Immich: uploaded originals copied (thumbnails/transcodes skipped — regenerable)."
+      else
+        err "  Immich: backing up uploaded originals failed (rsync rc=$irc)."; rc_any=1
+      fi
+    fi
+    write_restore_immich "$appdst/immich"
+  fi
+
+  if [[ "$any" != true ]]; then
+    note "No family apps (Immich/Paperless) installed — nothing extra to back up."
+    return 0
+  fi
+  mkdir -p "$appdst"
+  if [[ $rc_any -eq 0 ]]; then
+    ok "App data backup complete and verified."
+    printf '%s  apps backed up + verified\n' "$(date -Is)" > "$appdst/.apps-backup.verified" 2>/dev/null || true
+  else
+    rm -f "$appdst/.apps-backup.verified" 2>/dev/null || true
+    warn "App data backup had problems (see above / $logf). Your ARCHIVE backup is unaffected and still verified."
+  fi
+  return 0
+}
 
 for _t in rsync sha256sum numfmt df du findmnt; do
   command -v "$_t" >/dev/null 2>&1 || { err "Required tool not found: $_t."; exit 1; }
@@ -179,6 +322,11 @@ else
   err "One or more backed-up copies FAILED verification. Re-run the backup; do not trust it yet."
   exit 1
 fi
+
+# The archive itself is now safely backed up and verified. Additionally fold in the family apps'
+# own data (best-effort) — this can WARN but never marks the archive backup above as failed.
+backup_apps
+
 echo "Backup log: $logf"
 SCRIPT
 sudo chmod +x /usr/local/bin/archive-backup
@@ -351,8 +499,12 @@ cat <<EOF
 
     Run a verified backup (additive; re-checks every checksum at the destination):
       archive-backup
+      # If Immich/Paperless are installed, this ALSO dumps their own data (Paperless documents +
+      # tags via its exporter; Immich database + uploaded originals) under ${BACKUP_ROOT}/apps,
+      # each with a RESTORE.txt. A problem there only warns — it never fails the archive backup.
 
     Optional settings in /etc/archive-ingest.conf: BACKUP_ROOT, MAX_ARCHIVE_GIB (soft cap, default
-    1800), REQUIRE_SEPARATE_BACKUP (default true — refuse to "back up" onto the same disk).
+    1800), REQUIRE_SEPARATE_BACKUP (default true — refuse to "back up" onto the same disk),
+    BACKUP_APPS (default true — set false to skip the Immich/Paperless app-data backup).
     Tip: attach the tailnet share first ('archive-storage attach-backup'), then run 'archive-backup'.
 EOF
