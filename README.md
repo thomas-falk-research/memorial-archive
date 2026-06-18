@@ -29,7 +29,8 @@ It's a guided menu for the whole system:
   data are preserved; app versions advance to the latest.
 - **Reinstall / repair** — re-run setup to fix a broken command/service, without changing versions.
 - **Uninstall** — removes the tools only; it **never** touches your archive (`/srv/archive`) or backups.
-- **Everyday tasks** — ingest a drive, rebuild the search index, run a verified backup, show storage.
+- **Everyday tasks** — ingest a drive, rebuild the search index, **search the archive** (find a
+  document, e.g. the will), run a verified backup, show storage.
 
 Run it as your normal user (the one with sudo) — *not* with `sudo`. Everything below still works on
 its own for advanced use; the menu just drives it for you.
