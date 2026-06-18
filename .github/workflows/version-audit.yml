@@ -1,0 +1,39 @@
+name: version-audit
+
+# Confirms every app's pinned FALLBACK image tag still exists upstream, so a failed-lookup install
+# can never land a broken pin on the family's box. Runs weekly (a tag can be removed upstream at any
+# time), and on any PR that touches an app setup script or the audit itself. Needs registry egress,
+# so it is its own workflow rather than part of the fast push CI.
+
+on:
+  schedule:
+    - cron: '17 4 * * 1'    # Mondays 04:17 UTC (scheduled runs use the default branch)
+  pull_request:
+    paths:
+      - 'archive-*-setup.sh'
+      - 'ci/version-audit.sh'
+      - 'ci/lib.sh'
+      - '.github/workflows/version-audit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: version-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: fallback image tags exist
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install skopeo
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends skopeo
+
+      - name: Audit fallback image tags
+        run: bash ci/version-audit.sh
