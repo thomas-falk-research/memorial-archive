@@ -2,10 +2,11 @@
 #
 # archive-doctor.sh — one-shot, READ-ONLY health check for the memorial-archive server.
 #
-# It inspects everything the suite sets up — storage and mounts, the archive and its integrity
-# markers, the on-site/off-site backup, the search index, the family apps (Immich, Paperless),
-# the Caddy front door and friendly .home names, and the installed commands — and prints a
-# plain-English check for each, with a concrete "fix:" next step for anything that isn't healthy.
+# It inspects everything the suite sets up — storage and mounts (including writability, a read-only
+# remount, fstab 'nofail', free space and disk SMART health), the archive and its integrity markers,
+# the on-site/off-site backup, file permissions and credentials, the search index, the family apps
+# (Immich, Paperless), the Caddy front door and friendly .home names, and the installed commands —
+# and prints a plain-English check for each, with a concrete "fix:" next step for anything wrong.
 #
 # It NEVER changes anything, so it is always safe to run — especially right after setup or an update:
 #
@@ -75,12 +76,24 @@ note "archive=${ARCHIVE_ROOT}  backup=${BACKUP_ROOT}  cap=${MAX_ARCHIVE_GIB} GiB
 
 # ---- 2. storage & mounts ---------------------------------------------------------------------
 hdr "Storage"
+arch_src=""
 if [[ -d "$ARCHIVE_ROOT" ]] && is_sep_mount "$ARCHIVE_ROOT"; then
-  src="$(findmnt -no SOURCE -T "$ARCHIVE_ROOT" 2>/dev/null)"
+  src="$(findmnt -no SOURCE -T "$ARCHIVE_ROOT" 2>/dev/null)"; arch_src="$src"
   avail="$(df -PB1 "$ARCHIVE_ROOT" 2>/dev/null | awk 'NR==2{print $4}')"; avail="${avail:-0}"
   used_b="$(du -sb --exclude='lost+found' --exclude='.recoll' --exclude='.plocate.db' --exclude='.derived' "$ARCHIVE_ROOT" 2>/dev/null | cut -f1)"; used_b="${used_b:-0}"
   used_g=$(( used_b / 1024 / 1024 / 1024 ))
   ok "Archive on its own volume (${src}); ${used_g} GiB used, $(human "$avail") free."
+  # Silent-failure guards: a read-only remount (filesystem errors) or wrong ownership both make every
+  # future ingest fail, yet nothing else looks wrong until you try to copy.
+  if [[ ",$(findmnt -no OPTIONS -T "$ARCHIVE_ROOT" 2>/dev/null)," == *,ro,* ]]; then
+    no "Archive is mounted READ-ONLY — new ingests will fail. Filesystem errors can force this (a failing disk?)."
+    fix "check 'dmesg | tail -50'; unmount and fsck, or replace the drive (back up first)"
+  elif [[ -w "$ARCHIVE_ROOT" ]]; then
+    ok "Archive is writable by $(id -un) (ingest can write here)."
+  else
+    no "Archive is NOT writable by $(id -un) — ingest-verify can't create copies."
+    fix "give your user ownership: sudo chown $(id -un):$(id -gn) ${ARCHIVE_ROOT}"
+  fi
   if   (( used_g >= MAX_ARCHIVE_GIB ));            then no "Archive is OVER the ${MAX_ARCHIVE_GIB} GiB soft cap."; fix "stop ingesting, or raise MAX_ARCHIVE_GIB / add storage"
   elif (( used_g * 10 >= MAX_ARCHIVE_GIB * 9 ));   then wn "Archive is within 10% of the ${MAX_ARCHIVE_GIB} GiB soft cap."; fi
 elif [[ -d "$ARCHIVE_ROOT" ]]; then
@@ -95,9 +108,59 @@ if [[ -d "$BACKUP_ROOT" ]] && is_sep_mount "$BACKUP_ROOT"; then
   bsrc="$(findmnt -no SOURCE -T "$BACKUP_ROOT" 2>/dev/null)"
   bavail="$(df -PB1 "$BACKUP_ROOT" 2>/dev/null | awk 'NR==2{print $4}')"; bavail="${bavail:-0}"
   ok "Backup target mounted (${bsrc}); $(human "$bavail") free."
+  if [[ -n "$arch_src" && "$bsrc" == "$arch_src" ]]; then
+    no "Backup and archive are the SAME volume (${bsrc}) — one disk failure loses BOTH copies."
+    fix "attach a separate backup target: archive-storage attach-backup"
+  fi
 else
   wn "No backup target mounted at ${BACKUP_ROOT}."
   fix "attach one: archive-storage attach-backup   (external drive, or NFS/SMB share)"
+fi
+
+# The OS disk carries the apps' data, Docker images and logs — if it fills, they fail quietly.
+root_avail="$(df -PB1 / 2>/dev/null | awk 'NR==2{print $4}')"; root_avail="${root_avail:-0}"
+root_pct="$(df -P / 2>/dev/null | awk 'NR==2{gsub(/%/,"",$5); print $5}')"; root_pct="${root_pct:-0}"
+if   (( root_pct >= 95 )); then no "OS disk (/) is ${root_pct}% full ($(human "$root_avail") free) — apps/Docker/logs can fail."; fix "free space on /, e.g. prune Docker images: sudo docker system prune -a"
+elif (( root_pct >= 90 )); then wn "OS disk (/) is ${root_pct}% full ($(human "$root_avail") free)."
+else ok "OS disk (/) has $(human "$root_avail") free (${root_pct}% used)."; fi
+
+# ---- 2b. boot safety (fstab nofail) ----------------------------------------------------------
+hdr "Boot safety (fstab)"
+if [[ -r /etc/fstab ]]; then
+  for mp in "$ARCHIVE_ROOT" "$BACKUP_ROOT"; do
+    fline="$(awk -v m="$mp" '$1 !~ /^#/ && $2==m {print; exit}' /etc/fstab)"
+    if [[ -z "$fline" ]]; then
+      note "${mp}: no /etc/fstab entry (mounted by hand, or not persistent across reboot)."
+    elif [[ ",$(printf '%s' "$fline" | awk '{print $4}')," == *,nofail,* ]]; then
+      ok "${mp}: fstab entry has 'nofail' (a missing drive can't block boot)."
+    else
+      no "${mp}: fstab entry is MISSING 'nofail' — a missing/failed drive can hang boot."
+      fix "add nofail to its options in /etc/fstab (archive-storage attach-* does this for you)"
+    fi
+  done
+else
+  note "No readable /etc/fstab."
+fi
+
+# ---- 2c. disk health (SMART; best-effort — reading it usually needs privileges) ---------------
+hdr "Disk health (SMART)"
+if ! have smartctl; then
+  note "smartctl not installed — can't check drive SMART health.  (sudo apt install smartmontools)"
+else
+  declare -A _smart_seen=()
+  for entry in "OS:/" "Archive:${ARCHIVE_ROOT}"; do
+    lbl="${entry%%:*}"; path="${entry#*:}"
+    [[ -d "$path" ]] || continue
+    dsrc="$(findmnt -no SOURCE -T "$path" 2>/dev/null)"
+    [[ "$dsrc" == /dev/* ]] || { note "${lbl} (${path}): not a plain local disk — skipping SMART."; continue; }
+    pk="$(lsblk -no PKNAME "$dsrc" 2>/dev/null | head -1)"; disk="${pk:+/dev/$pk}"; disk="${disk:-$dsrc}"
+    [[ -n "${_smart_seen[$disk]:-}" ]] && continue; _smart_seen[$disk]=1
+    sout="$(smartctl -H "$disk" 2>/dev/null)"
+    if   [[ -z "$sout" ]]; then note "${lbl} (${disk}): SMART needs privileges here — run: sudo smartctl -H ${disk}"
+    elif printf '%s' "$sout" | grep -qiE 'PASSED|result: *ok'; then ok "${lbl} disk ${disk}: SMART self-assessment PASSED."
+    elif printf '%s' "$sout" | grep -qiE 'FAIL'; then no "${lbl} disk ${disk}: SMART reports FAILING — copy data off and replace it NOW."; fix "investigate: sudo smartctl -a ${disk}"
+    else note "${lbl} (${disk}): SMART status unclear — run: sudo smartctl -H ${disk}"; fi
+  done
 fi
 
 # ---- 3. archive contents & integrity ---------------------------------------------------------
@@ -131,6 +194,29 @@ if [[ -f /etc/udev/rules.d/99-archive-no-automount.rules ]]; then
 else
   wn "USB auto-mount udev rule is missing — media could mount writable on plug-in."
   fix "re-run archive-ingest-setup.sh"
+fi
+
+# ---- 4b. permissions & credentials -----------------------------------------------------------
+hdr "Permissions & credentials"
+if [[ -e /etc/archive-backup.cred ]]; then
+  cred_perm="$(stat -c '%a' /etc/archive-backup.cred 2>/dev/null)"; cred_own="$(stat -c '%U' /etc/archive-backup.cred 2>/dev/null)"
+  if [[ "$cred_own" == root && "$cred_perm" == 600 ]]; then
+    ok "Backup credentials (/etc/archive-backup.cred) are root-owned and 0600."
+  else
+    no "Backup credentials (/etc/archive-backup.cred) are ${cred_own:-?}:${cred_perm:-?} — secrets readable by others."
+    fix "sudo chown root:root /etc/archive-backup.cred && sudo chmod 600 /etc/archive-backup.cred"
+  fi
+else
+  note "No /etc/archive-backup.cred (only needed for a password-protected SMB/CIFS backup share)."
+fi
+if [[ -e /etc/archive-ingest.conf ]]; then
+  conf_perm="$(stat -c '%a' /etc/archive-ingest.conf 2>/dev/null)"
+  if [[ "${conf_perm: -1}" =~ [2367] ]]; then
+    wn "/etc/archive-ingest.conf is world-writable (${conf_perm}) — anyone could change archive settings."
+    fix "sudo chmod o-w /etc/archive-ingest.conf"
+  else
+    ok "Config /etc/archive-ingest.conf is not world-writable (${conf_perm})."
+  fi
 fi
 
 # ---- 5. search index -------------------------------------------------------------------------
