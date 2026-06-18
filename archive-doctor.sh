@@ -192,11 +192,20 @@ else
     [[ "$dsrc" == /dev/* ]] || { note "${lbl} (${path}): not a plain local disk — skipping SMART."; continue; }
     pk="$(lsblk -no PKNAME "$dsrc" 2>/dev/null | head -1)"; disk="${pk:+/dev/$pk}"; disk="${disk:-$dsrc}"
     [[ -n "${_smart_seen[$disk]:-}" ]] && continue; _smart_seen[$disk]=1
-    sout="$(smartctl -H "$disk" 2>/dev/null)"
-    if   [[ -z "$sout" ]]; then note "${lbl} (${disk}): SMART needs privileges here — run: sudo smartctl -H ${disk}"
-    elif printf '%s' "$sout" | grep -qiE 'PASSED|result: *ok'; then ok "${lbl} disk ${disk}: SMART self-assessment PASSED."
-    elif printf '%s' "$sout" | grep -qiE 'FAIL'; then no "${lbl} disk ${disk}: SMART reports FAILING — copy data off and replace it NOW."; fix "investigate: sudo smartctl -a ${disk}"
-    else note "${lbl} (${disk}): SMART status unclear — run: sudo smartctl -H ${disk}"; fi
+    # Classify on smartctl's REAL verdict lines only — never grep the whole blob for "fail", or a
+    # benign "open device failed" / USB-bridge "specify -d" gets mislabelled as a failing drive.
+    # This check never sudo's, so a disk it can't read (needs root, or sits behind a USB bridge)
+    # must read as "go check with sudo", never as PASSED and never as a failure.
+    sout="$(smartctl -H "$disk" 2>&1)"
+    if   printf '%s' "$sout" | grep -qiE 'self-assessment test result:[[:space:]]*PASSED|SMART Health Status:[[:space:]]*OK'; then
+      ok "${lbl} disk ${disk}: SMART self-assessment PASSED."
+    elif printf '%s' "$sout" | grep -qiE 'self-assessment test result:[[:space:]]*FAILED|SMART Health Status:[[:space:]]*FAILED|FAILING_NOW'; then
+      no "${lbl} disk ${disk}: SMART self-assessment FAILED — back up its data and replace the drive."; fix "investigate: sudo smartctl -a ${disk}"
+    elif printf '%s' "$sout" | grep -qiE 'Unknown USB bridge|[Ss]pecify device type'; then
+      note "${lbl} (${disk}): behind a USB bridge — check health with: sudo smartctl -d sat -H ${disk}   (or -d auto)"
+    else
+      note "${lbl} (${disk}): SMART needs privileges to read — check with: sudo smartctl -H ${disk}"
+    fi
   done
 fi
 
