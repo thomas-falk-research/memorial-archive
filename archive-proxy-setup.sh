@@ -32,6 +32,8 @@ COPYPARTY_UPSTREAM="${COPYPARTY_UPSTREAM:-127.0.0.1:3923}"
 COPYPARTY_DIR="${COPYPARTY_DIR:-/srv/apps/copyparty}"
 CZKAWKA_UPSTREAM="${CZKAWKA_UPSTREAM:-127.0.0.1:5800}"
 CZKAWKA_DIR="${CZKAWKA_DIR:-/srv/apps/czkawka}"
+STIRLING_UPSTREAM="${STIRLING_UPSTREAM:-127.0.0.1:8082}"
+STIRLING_DIR="${STIRLING_DIR:-/srv/apps/stirling}"
 SEARCH_USER="${SEARCH_USER:-family}"
 
 PHOTOS_HOST="photos.${BASE_DOMAIN}"
@@ -39,6 +41,7 @@ DOCS_HOST="docs.${BASE_DOMAIN}"
 SEARCH_HOST="search.${BASE_DOMAIN}"
 FILES_HOST="files.${BASE_DOMAIN}"
 DUPES_HOST="dupes.${BASE_DOMAIN}"
+PDF_HOST="pdf.${BASE_DOMAIN}"
 PORTAL_HOST="archive.${BASE_DOMAIN}"
 
 # The Files browser (copyparty) is only routed/shown if it's installed — it serves anonymous-read on
@@ -49,6 +52,9 @@ copyparty_installed=false
 # shown as a family portal tile. It serves a no-auth GUI on loopback, so Caddy must gate it too.
 czkawka_installed=false
 [[ -d "$CZKAWKA_DIR" ]] && czkawka_installed=true
+# Stirling-PDF is a family-usable tool: routed AND shown as a portal tile when installed.
+stirling_installed=false
+[[ -d "$STIRLING_DIR" ]] && stirling_installed=true
 
 ASSUME_YES=false
 usage() {
@@ -88,6 +94,7 @@ printf '    %-18s -> Paperless-ngx (%s)\n' "${DOCS_HOST}" "$PAPERLESS_UPSTREAM"
 printf '    %-18s -> recoll search (%s, keeps its login)\n' "${SEARCH_HOST}" "$SEARCH_UPSTREAM"
 [[ "$copyparty_installed" == true ]] && printf '    %-18s -> files browser (%s, same login)\n' "${FILES_HOST}" "$COPYPARTY_UPSTREAM"
 [[ "$czkawka_installed" == true ]] && printf '    %-18s -> duplicate finder (%s, same login; admin tool, no portal tile)\n' "${DUPES_HOST}" "$CZKAWKA_UPSTREAM"
+[[ "$stirling_installed" == true ]] && printf '    %-18s -> PDF tools (%s, same login)\n' "${PDF_HOST}" "$STIRLING_UPSTREAM"
 printf '    portal also answers on the IP (%s) and any unmatched name\n' "${lan_ip:-this host}"
 if [[ "${ASSUME_YES}" != "true" ]]; then
   read -rp $'\nProceed? [y/N] ' _ans
@@ -135,6 +142,15 @@ dupes_dns=""
 if [[ "$czkawka_installed" == true ]]; then
   dupes_dns="$(printf '        %-16s -> %s' "${DUPES_HOST}" "${lan_ip:-<mini-PC IP>}")"
 fi
+pdf_card=""; pdf_dns=""
+if [[ "$stirling_installed" == true ]]; then
+  pdf_card="$(cat <<HTMLCARD
+    <a class="card" href="http://${PDF_HOST}/"><span class="emoji">🛠️</span>
+      <span>PDF Tools<br><span class="desc">merge, split, OCR, convert PDFs</span></span></a>
+HTMLCARD
+)"
+  pdf_dns="$(printf '        %-16s -> %s' "${PDF_HOST}" "${lan_ip:-<mini-PC IP>}")"
+fi
 
 # ---- Portal page -----------------------------------------------------------------------------
 log "Writing the portal page to ${PORTAL_DIR}"
@@ -176,6 +192,7 @@ sudo tee "$PORTAL_DIR/index.html" >/dev/null <<HTML
     <a class="card" href="http://${SEARCH_HOST}/"><span class="emoji">🔎</span>
       <span>Search Everything<br><span class="desc">find any file by word or name</span></span></a>
 ${files_card}
+${pdf_card}
   </div>
   <footer>${PORTAL_HOST}</footer>
 </body>
@@ -243,6 +260,20 @@ CADDY3
   info "Added the duplicate-finder route: ${DUPES_HOST} -> ${CZKAWKA_UPSTREAM} (password-protected)."
 fi
 
+# Append the PDF tools (Stirling-PDF) route only when installed — behind the family password.
+if [[ "$stirling_installed" == true ]]; then
+  sudo tee -a "$CADDYFILE" >/dev/null <<CADDY4
+
+http://${PDF_HOST} {
+	${auth_dir} {
+		${SEARCH_USER} ${search_hash}
+	}
+	reverse_proxy ${STIRLING_UPSTREAM}
+}
+CADDY4
+  info "Added the PDF tools route: ${PDF_HOST} -> ${STIRLING_UPSTREAM} (password-protected)."
+fi
+
 log "Validating and reloading Caddy"
 if sudo caddy validate --adapter caddyfile --config "$CADDYFILE" >/dev/null 2>&1; then
   sudo systemctl enable --now caddy >/dev/null 2>&1 || true
@@ -267,6 +298,7 @@ cat <<EOF
         ${SEARCH_HOST}   -> ${lan_ip:-<mini-PC IP>}
 ${files_dns}
 ${dupes_dns}
+${pdf_dns}
 
     Then, from any device using AdGuard for DNS:
         http://${PORTAL_HOST}/     <- the one address to remember (portal with buttons)

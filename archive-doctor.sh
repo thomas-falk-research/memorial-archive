@@ -236,7 +236,7 @@ hdr "Family apps"
 if ! have ss; then
   note "Can't check service ports ('ss' not found)."
 else
-  for entry in "Immich:2283:immich" "Paperless:8000:paperless" "Files (copyparty):3923:copyparty" "Duplicates (czkawka):5800:czkawka"; do
+  for entry in "Immich:2283:immich" "Paperless:8000:paperless" "Files (copyparty):3923:copyparty" "Duplicates (czkawka):5800:czkawka" "PDF tools (Stirling):8082:stirling"; do
     nm="${entry%%:*}"; rest="${entry#*:}"; port="${rest%%:*}"; dir="${rest#*:}"
     listening "$port"; lp=$?
     if   [[ $lp -eq 0 ]]; then ok "${nm} is responding on :${port}."
@@ -277,6 +277,7 @@ if [[ $on80 -eq 0 ]] && have curl; then
   fn_names=(archive photos docs search)
   [[ -d "$APPS_ROOT/copyparty" ]] && fn_names+=(files)
   [[ -d "$APPS_ROOT/czkawka" ]] && fn_names+=(dupes)
+  [[ -d "$APPS_ROOT/stirling" ]] && fn_names+=(pdf)
   for n in "${fn_names[@]}"; do
     name="${n}.${BASE_DOMAIN}"; code="$(http_code "$name")"
     case "$code" in
