@@ -74,6 +74,7 @@ for _cfg in /etc/archive-ingest.conf "${XDG_CONFIG_HOME:-$HOME/.config}/archive-
 done
 APPS_ROOT="${APPS_ROOT:-/srv/apps}"
 BASE_DOMAIN="${BASE_DOMAIN:-home}"
+RESTIC_PASS_FILE="${RESTIC_PASSWORD_FILE:-/etc/archive-restic.pass}"
 
 if [[ -t 1 ]]; then b=$'\033[1m'; cyn=$'\033[1;36m'; rst=$'\033[0m'; else b=""; cyn=""; rst=""; fi
 h() { printf '\n%s%s%s\n' "$cyn" "$1" "$rst"; }
@@ -167,6 +168,19 @@ if [[ -e /etc/archive-backup.cred ]]; then
   cat <<'TXT'
   Stored in: /etc/archive-backup.cred  (administrator-only).
   Reset it:  re-enter the share's username/password with:  archive-storage attach-backup
+TXT
+fi
+
+# --- restic backup passphrase (the one secret that cannot be reset) ---------------------------
+if [[ -e "$RESTIC_PASS_FILE" ]]; then
+  h "Backup encryption passphrase (Restic)  —  the ONE secret you cannot reset"
+  cat <<TXT
+  It encrypts your off-site snapshots and is stored (mode 600) at:
+      ${RESTIC_PASS_FILE}
+  There is NO reset: if this is lost, the encrypted backup can never be opened again. So:
+    - Keep a copy OFF the box — a password manager, or written down somewhere safe.
+    - To read it (to record it):  cat ${RESTIC_PASS_FILE}
+  (Changing it would orphan every existing snapshot, so the tools never rotate it.)
 TXT
 fi
 

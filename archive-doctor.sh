@@ -314,6 +314,18 @@ if [[ -d "$BACKUP_ROOT" ]] && is_sep_mount "$BACKUP_ROOT"; then
 else
   note "Skipped (no backup target mounted)."
 fi
+# Encrypted, deduplicated off-site snapshots (restic), if set up — checked by its own verified marker.
+if have archive-restic && [[ -d "$BACKUP_ROOT" ]] && is_sep_mount "$BACKUP_ROOT"; then
+  rmarker="$BACKUP_ROOT/.archive-restic.verified"
+  if [[ -f "$rmarker" ]]; then
+    rmts="$(stat -c %Y "$rmarker" 2>/dev/null || echo 0)"; rage_d=$(( ( $(date +%s) - rmts ) / 86400 ))
+    if (( rage_d > BACKUP_STALE_DAYS )); then wn "Encrypted (restic) snapshot last verified ${rage_d} day(s) ago (older than ${BACKUP_STALE_DAYS})."; fix "archive-restic backup"
+    else ok "Encrypted (restic) snapshot verified ${rage_d} day(s) ago."; fi
+  else
+    wn "Restic is installed but has no verified encrypted snapshot yet."
+    fix "run one: archive-restic backup"
+  fi
+fi
 
 # ---- 9b. family app data backup (their DB/tags/uploads live outside the archive) -------------
 hdr "App data backup"
@@ -348,6 +360,7 @@ declare -A from=(
   [archive-find]=archive-search-setup.sh
   [archive-storage]=archive-storage-setup.sh [archive-backup]=archive-storage-setup.sh
   [archive-credentials]=archive-credentials-setup.sh
+  [archive-restic]=archive-restic-setup.sh
 )
 missing=0
 for cmd in safe-mount ingest-verify archive-verify archive archive-index archive-search archive-find archive-storage archive-backup; do
