@@ -414,7 +414,10 @@ declare -A from=(
   [archive-webui-run]=archive-webui-setup.sh
 )
 missing=0
-for cmd in safe-mount ingest-verify archive-verify archive archive-index archive-search archive-find archive-storage archive-backup; do
+# archive-credentials is included: it's the family's map back into every login, so a box that has
+# any login configured should never be without it (a locked-out, non-technical family must not hit a
+# "command not found" dead-end).
+for cmd in safe-mount ingest-verify archive-verify archive archive-index archive-search archive-find archive-storage archive-backup archive-credentials; do
   if have "$cmd"; then :; else no "Command '${cmd}' is not installed."; fix "run ${from[$cmd]}"; missing=$((missing+1)); fi
 done
 (( missing == 0 )) && ok "All core commands are installed."

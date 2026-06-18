@@ -68,7 +68,10 @@ do_install() {
   if confirm "3) Search (full-text + filename)?";                                     then run archive-search-setup.sh; fi
   if confirm "4) Read-only SMB share for iPhones/iPads?";                             then run archive-serve-setup.sh; fi
   if confirm "5) Storage layout + verified backups?";                                 then run archive-storage-setup.sh; fi
-  if confirm "6) Password & reset reference (archive-credentials)?";                   then run archive-credentials-setup.sh; fi
+  # Not optional: the login map is the one thing a locked-out, non-technical family must never be
+  # without — so it's always installed (it's a tiny read-only guide that stores no secrets itself).
+  say "6) Password & reset reference (archive-credentials) — installed automatically (your map to every login)."
+  run archive-credentials-setup.sh --yes
   if confirm "7) Encrypted off-site snapshots (Restic, alongside rsync)?";             then run archive-restic-setup.sh; fi
   say ""
   say "Optional family-facing apps (Docker):"
@@ -103,7 +106,9 @@ refresh_installed() {
   inst_search  && run archive-search-setup.sh  --yes
   inst_serve   && run archive-serve-setup.sh   --yes
   inst_storage && run archive-storage-setup.sh --yes
-  inst_creds   && run archive-credentials-setup.sh --yes
+  # Always (re)install the login map — never gated on it already being present, so an Update/Reinstall
+  # heals a box that somehow never got it (it stores no secrets; it's just the reset guide).
+  run archive-credentials-setup.sh --yes
   inst_restic  && run archive-restic-setup.sh  --yes
   inst_apps    && run archive-apps-setup.sh    --yes
   inst_webui   && run archive-webui-setup.sh   --yes
@@ -292,7 +297,12 @@ do_everyday() {
            archive-apps status
            confirm "Update all apps now (pull newer images + recreate)?" && archive-apps update
          else err "Not installed — run Install (app manager) first."; fi ;;
-      7) if have_cmd archive-credentials; then archive-credentials; else err "Not installed — run Install (step 6) first."; fi ;;
+      7) if have_cmd archive-credentials; then archive-credentials
+         else
+           warn "The passwords & logins guide isn't installed yet — installing it now (one moment)..."
+           if run archive-credentials-setup.sh --yes; then archive-credentials
+           else err "Could not install it automatically — run: bash archive-credentials-setup.sh"; fi
+         fi ;;
       b|B|q|Q) return ;;
       *) warn "Please pick 1-7 or b." ;;
     esac
