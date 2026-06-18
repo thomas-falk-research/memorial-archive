@@ -47,6 +47,7 @@ inst_webui()     { [[ -f /etc/systemd/system/archive-webui.service ]]; }
 inst_immich()    { [[ -d /srv/apps/immich ]]; }
 inst_paperless() { [[ -d /srv/apps/paperless ]]; }
 inst_copyparty() { [[ -d /srv/apps/copyparty ]]; }
+inst_apps()      { have_cmd archive-apps; }
 inst_proxy()     { grep -qs 'archive-proxy-setup.sh' /etc/caddy/Caddyfile; }
 
 # ---- actions ---------------------------------------------------------------------------------
@@ -63,11 +64,12 @@ do_install() {
   if confirm "5) Storage layout + verified backups?";                                 then run archive-storage-setup.sh; fi
   say ""
   say "Optional family-facing apps (Docker):"
-  if confirm "6) Phone search web UI?";                            then run archive-webui-setup.sh; fi
-  if confirm "7) Photos & videos (Immich)?";                       then run archive-immich-setup.sh; fi
-  if confirm "8) Documents (Paperless-ngx)?";                      then run archive-paperless-setup.sh; fi
-  if confirm "9) Files web browser (copyparty)?";                  then run archive-copyparty-setup.sh; fi
-  if confirm "10) One-URL front door (portal + friendly names)?";  then run archive-proxy-setup.sh; fi
+  if confirm "6) App manager + shared network (manage all apps from one command)?"; then run archive-apps-setup.sh; fi
+  if confirm "7) Phone search web UI?";                            then run archive-webui-setup.sh; fi
+  if confirm "8) Photos & videos (Immich)?";                       then run archive-immich-setup.sh; fi
+  if confirm "9) Documents (Paperless-ngx)?";                      then run archive-paperless-setup.sh; fi
+  if confirm "10) Files web browser (copyparty)?";                 then run archive-copyparty-setup.sh; fi
+  if confirm "11) One-URL front door (portal + friendly names)?";  then run archive-proxy-setup.sh; fi
   ok "Install run complete. Tip: choose 'Check health' to verify it all."
 }
 
@@ -79,6 +81,7 @@ refresh_installed() {
   inst_search  && run archive-search-setup.sh  --yes
   inst_serve   && run archive-serve-setup.sh   --yes
   inst_storage && run archive-storage-setup.sh --yes
+  inst_apps    && run archive-apps-setup.sh    --yes
   inst_webui   && run archive-webui-setup.sh   --yes
   if inst_immich; then
     if [[ "$mode" == "--repair" ]]; then
@@ -141,7 +144,7 @@ do_uninstall() {
 
   if confirm "Remove the installed commands (archive, archive-backup, archive-storage, …)?"; then
     local c
-    for c in safe-mount ingest-verify archive-verify archive archive-index archive-search archive-find archive-storage archive-backup archive-webui-run; do
+    for c in safe-mount ingest-verify archive-verify archive archive-index archive-search archive-find archive-storage archive-backup archive-apps archive-webui-run; do
       sudo rm -f "/usr/local/bin/$c"
     done
     sudo rm -f /etc/update-motd.d/50-memorial-archive   # the login health banner (installed with storage)
@@ -178,6 +181,10 @@ do_uninstall() {
     fi
   done
 
+  if command -v docker >/dev/null 2>&1; then
+    if sudo docker network rm memorial >/dev/null 2>&1; then ok "Removed the shared 'memorial' Docker network."; fi
+  fi
+
   if confirm "Remove saved backup SMB credentials and /etc/archive-ingest.conf (regenerable)?"; then
     sudo rm -f /etc/archive-backup.cred /etc/archive-ingest.conf
     ok "Removed credentials + config."
@@ -196,6 +203,7 @@ do_everyday() {
     say "  2) Rebuild the search index"
     say "  3) Run a verified backup"
     say "  4) Show storage status"
+    say "  5) Manage apps              (status · update · logs)"
     say "  b) Back to the main menu"
     if ! read -rp "Choose: " ch; then return; fi
     case "$ch" in
@@ -203,8 +211,12 @@ do_everyday() {
       2) if have_cmd archive-index;  then archive-index;  else err "Not installed — run Install (search) first."; fi ;;
       3) if have_cmd archive-backup; then archive-backup; else err "Not installed — run Install (storage) first."; fi ;;
       4) if have_cmd archive-storage;then archive-storage;else err "Not installed — run Install (storage) first."; fi ;;
+      5) if have_cmd archive-apps; then
+           archive-apps status
+           confirm "Update all apps now (pull newer images + recreate)?" && archive-apps update
+         else err "Not installed — run Install (app manager) first."; fi ;;
       b|B|q|Q) return ;;
-      *) warn "Please pick 1-4 or b." ;;
+      *) warn "Please pick 1-5 or b." ;;
     esac
     pause
   done

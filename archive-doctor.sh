@@ -246,6 +246,11 @@ else
     else note "${nm} not deployed (optional)."; fi
   done
 fi
+if [[ -x /usr/local/bin/archive-apps ]]; then
+  note "Manage every app from one place:  archive-apps status · archive-apps update · archive-apps logs <app>"
+elif [[ -d "$APPS_ROOT" ]] && [[ -n "$(find "$APPS_ROOT" -mindepth 2 -maxdepth 2 -name docker-compose.yml -print -quit 2>/dev/null)" ]]; then
+  note "Tip: 'archive-apps-setup.sh' installs one command (archive-apps) to update/inspect all apps at once."
+fi
 
 # ---- 7. front door (Caddy) -------------------------------------------------------------------
 hdr "Front door (Caddy)"
