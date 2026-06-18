@@ -64,17 +64,20 @@ docmost_installed=false
 [[ -d "$DOCMOST_DIR" ]] && docmost_installed=true
 
 ASSUME_YES=false
+RESET_SEARCH_PW="${RESET_SEARCH_PW:-}"
 usage() {
   cat <<USAGE
-Usage: ${0##*/} [--yes|-y] [--help|-h]
-  --yes, -y   skip the confirmation prompt; generate a search password if none exists
-  --help, -h  show this help and exit
-Env overrides: BASE_DOMAIN (default 'home'), SITE_TITLE, and the *_UPSTREAM addresses.
+Usage: ${0##*/} [--yes|-y] [--reset-search-password] [--help|-h]
+  --yes, -y                 skip the confirmation prompt; generate a search password if none exists
+  --reset-search-password   set a NEW family/search password (same as RESET_SEARCH_PW=1)
+  --help, -h                show this help and exit
+Env overrides: BASE_DOMAIN (default 'home'), SITE_TITLE, RESET_SEARCH_PW, and the *_UPSTREAM addresses.
 USAGE
 }
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -y|--yes)  ASSUME_YES=true ;;
+    --reset-search-password) RESET_SEARCH_PW=1 ;;
     -h|--help) usage; exit 0 ;;
     *) printf 'Unknown option: %s (try --help)\n' "$1" >&2; exit 2 ;;
   esac
@@ -115,10 +118,14 @@ search_hash=""
 if sudo test -f "$CADDYFILE"; then
   search_hash="$(sudo awk '$1=="basic_auth"||$1=="basicauth"{a=1} a&&$1=="'"$SEARCH_USER"'"{print $2; exit}' "$CADDYFILE" 2>/dev/null || true)"
 fi
-if [[ -n "$search_hash" ]]; then
+if [[ -n "$search_hash" && "$RESET_SEARCH_PW" != "1" ]]; then
   info "Reusing the existing '${SEARCH_USER}' search password."
 else
-  warn "No existing search password found in ${CADDYFILE}."
+  if [[ "$RESET_SEARCH_PW" == "1" && -n "$search_hash" ]]; then
+    warn "Resetting the '${SEARCH_USER}' search/family password (RESET_SEARCH_PW)."
+  else
+    warn "No existing search password found in ${CADDYFILE}."
+  fi
   if [[ "${ASSUME_YES}" == "true" ]]; then
     pw="$(openssl rand -base64 12 2>/dev/null || head -c 9 /dev/urandom | base64)"; GEN_SEARCH_PW="$pw"
   else

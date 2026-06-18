@@ -42,6 +42,7 @@ have_cmd()       { [[ -x "/usr/local/bin/$1" ]]; }
 inst_ingest()    { have_cmd ingest-verify; }
 inst_search()    { have_cmd archive-index; }
 inst_storage()   { have_cmd archive-storage; }
+inst_creds()     { have_cmd archive-credentials; }
 inst_serve()     { grep -qs 'Digital Archive' /etc/samba/smb.conf; }
 inst_webui()     { [[ -f /etc/systemd/system/archive-webui.service ]]; }
 inst_immich()    { [[ -d /srv/apps/immich ]]; }
@@ -65,17 +66,18 @@ do_install() {
   if confirm "3) Search (full-text + filename)?";                                     then run archive-search-setup.sh; fi
   if confirm "4) Read-only SMB share for iPhones/iPads?";                             then run archive-serve-setup.sh; fi
   if confirm "5) Storage layout + verified backups?";                                 then run archive-storage-setup.sh; fi
+  if confirm "6) Password & reset reference (archive-credentials)?";                   then run archive-credentials-setup.sh; fi
   say ""
   say "Optional family-facing apps (Docker):"
-  if confirm "6) App manager + shared network (manage all apps from one command)?"; then run archive-apps-setup.sh; fi
-  if confirm "7) Phone search web UI?";                            then run archive-webui-setup.sh; fi
-  if confirm "8) Photos & videos (Immich)?";                       then run archive-immich-setup.sh; fi
-  if confirm "9) Documents (Paperless-ngx)?";                      then run archive-paperless-setup.sh; fi
-  if confirm "10) Files web browser (copyparty)?";                 then run archive-copyparty-setup.sh; fi
-  if confirm "11) Duplicate finder (czkawka, read-only)?";         then run archive-czkawka-setup.sh; fi
-  if confirm "12) PDF tools (Stirling-PDF)?";                      then run archive-stirling-setup.sh; fi
-  if confirm "13) Notes & memories (Docmost, family-writable)?";   then run archive-docmost-setup.sh; fi
-  if confirm "14) One-URL front door (portal + friendly names)?";  then run archive-proxy-setup.sh; fi
+  if confirm "7) App manager + shared network (manage all apps from one command)?"; then run archive-apps-setup.sh; fi
+  if confirm "8) Phone search web UI?";                            then run archive-webui-setup.sh; fi
+  if confirm "9) Photos & videos (Immich)?";                       then run archive-immich-setup.sh; fi
+  if confirm "10) Documents (Paperless-ngx)?";                     then run archive-paperless-setup.sh; fi
+  if confirm "11) Files web browser (copyparty)?";                 then run archive-copyparty-setup.sh; fi
+  if confirm "12) Duplicate finder (czkawka, read-only)?";         then run archive-czkawka-setup.sh; fi
+  if confirm "13) PDF tools (Stirling-PDF)?";                      then run archive-stirling-setup.sh; fi
+  if confirm "14) Notes & memories (Docmost, family-writable)?";   then run archive-docmost-setup.sh; fi
+  if confirm "15) One-URL front door (portal + friendly names)?";  then run archive-proxy-setup.sh; fi
   ok "Install run complete. Tip: choose 'Check health' to verify it all."
 }
 
@@ -87,6 +89,7 @@ refresh_installed() {
   inst_search  && run archive-search-setup.sh  --yes
   inst_serve   && run archive-serve-setup.sh   --yes
   inst_storage && run archive-storage-setup.sh --yes
+  inst_creds   && run archive-credentials-setup.sh --yes
   inst_apps    && run archive-apps-setup.sh    --yes
   inst_webui   && run archive-webui-setup.sh   --yes
   if inst_immich; then
@@ -174,7 +177,7 @@ do_uninstall() {
 
   if confirm "Remove the installed commands (archive, archive-backup, archive-storage, …)?"; then
     local c
-    for c in safe-mount ingest-verify archive-verify archive archive-index archive-search archive-find archive-storage archive-backup archive-apps archive-webui-run; do
+    for c in safe-mount ingest-verify archive-verify archive archive-index archive-search archive-find archive-storage archive-backup archive-credentials archive-apps archive-webui-run; do
       sudo rm -f "/usr/local/bin/$c"
     done
     sudo rm -f /etc/update-motd.d/50-memorial-archive   # the login health banner (installed with storage)
@@ -234,6 +237,7 @@ do_everyday() {
     say "  3) Run a verified backup"
     say "  4) Show storage status"
     say "  5) Manage apps              (status · update · logs)"
+    say "  6) Passwords & logins       (where each lives + how to reset)"
     say "  b) Back to the main menu"
     if ! read -rp "Choose: " ch; then return; fi
     case "$ch" in
@@ -245,8 +249,9 @@ do_everyday() {
            archive-apps status
            confirm "Update all apps now (pull newer images + recreate)?" && archive-apps update
          else err "Not installed — run Install (app manager) first."; fi ;;
+      6) if have_cmd archive-credentials; then archive-credentials; else err "Not installed — run Install (step 6) first."; fi ;;
       b|B|q|Q) return ;;
-      *) warn "Please pick 1-5 or b." ;;
+      *) warn "Please pick 1-6 or b." ;;
     esac
     pause
   done
