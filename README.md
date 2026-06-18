@@ -1,5 +1,7 @@
 # memorial-archive
 
+[![CI](https://github.com/thomas-falk-research/memorial-archive/actions/workflows/ci.yml/badge.svg)](https://github.com/thomas-falk-research/memorial-archive/actions/workflows/ci.yml)
+
 Tooling to turn a dedicated Ubuntu mini-PC into a **digital-archive server**: a safe place to
 gather everything off a person's drives, computers, phones, and shares; copy it in with
 verified, checksummed integrity; make every file keyword-searchable; and let the family browse
@@ -461,6 +463,38 @@ It cleans up after itself (unmounts, detaches the loopbacks, removes the scratch
 folder as your normal user (it needs `sudo` for loopback devices). **APFS and BitLocker can't be
 created on Linux**, so they aren't covered automatically — test those with real media (an APFS drive
 from a Mac; a BitLocker volume — `safe-mount` now detects both and prints the unlock/ingest steps).
+
+---
+
+## For maintainers: automated checks before every change (`ci/`)
+
+Every script here runs as root on a box that holds irreplaceable data, so a change is checked
+**before** it can reach an installation. The same checks run two ways — locally and in GitHub
+Actions on every push and pull request (the badge at the top is their status):
+
+```
+./ci/run.sh        # run all of it locally before you push (needs: shellcheck, python3-yaml)
+```
+
+It performs three static checks and fails loudly (non-zero exit) on any problem:
+
+- **`bash -n` + `py_compile`** — every shell script parses and the Python helper compiles.
+- **`shellcheck -S style`** — at the strictest level, on the outer setup scripts **and** on each
+  command they embed. Installed commands are written as `sudo tee /usr/local/bin/<cmd> <<'SCRIPT'
+  … SCRIPT` heredocs that the outer shellcheck treats as opaque text, so `ci/shellcheck-all.sh`
+  **extracts each body and lints it on its own** — otherwise the bulk of the real logic would go
+  unchecked.
+- **compose render + validation** (`ci/validate-compose.py`) — there's no Docker in CI, so it
+  reproduces what each app setup script writes (rendering the `<<EOF` compose heredoc with
+  representative values), parses it as YAML, and asserts the safety-critical structure: **any
+  archive mount is read-only (`:ro`)**, apps that must not see the archive don't mount it, the
+  Caddy-fronted apps bind to loopback only, and a service joining the shared `memorial` network
+  finds it declared external. A compose file that regressed to mounting the masters read-write
+  would fail the build.
+
+The CI job is pinned to `ubuntu-24.04` so its `shellcheck` (0.9.0) matches the baseline these
+scripts are kept clean against. If you add a script or an embedded command, no wiring is needed —
+the checks discover every `*.sh`/`ci/*.sh` and every `/usr/local/bin/<cmd>` heredoc automatically.
 
 ---
 
