@@ -259,6 +259,8 @@ for _cfg in /etc/archive-ingest.conf "${XDG_CONFIG_HOME:-$HOME/.config}/archive-
   fi
 done
 INGEST_MNT="${INGEST_MNT:-/mnt/ingest}"
+ARCHIVE_ROOT="${ARCHIVE_ROOT:-/srv/archive}"
+BACKUP_ROOT="${BACKUP_ROOT:-/srv/backup}"
 
 c_red=$'\033[1;31m'; c_grn=$'\033[1;32m'; c_yel=$'\033[1;33m'; c_cyn=$'\033[0;36m'; c_rst=$'\033[0m'
 ok()   { printf '%s%s%s\n' "$c_grn" "$*" "$c_rst"; }
@@ -284,6 +286,21 @@ disk_is_system() {  # does this whole disk host /, /boot*, or swap anywhere in i
   return 1
 }
 
+disk_is_protected() {  # the box's OWN disks: the system disk OR the archive/backup volume.
+  # NEVER write-block or mount these. The archive disk is frequently USB-attached too, so it is not a
+  # "system" disk by the test above — yet selecting it would unmount /srv/archive and flip it
+  # read-only mid-ingest. (ARCHIVE_ROOT/BACKUP_ROOT are guarded for empty so an unset var can't make
+  # the "/*" glob match — and thus protect — every device.)
+  local disk="$1" mp
+  disk_is_system "$disk" && return 0
+  while IFS= read -r mp; do
+    [[ -z "$mp" ]] && continue
+    if [[ -n "${ARCHIVE_ROOT:-}" && ( "$mp" == "$ARCHIVE_ROOT" || "$mp" == "$ARCHIVE_ROOT"/* ) ]]; then return 0; fi
+    if [[ -n "${BACKUP_ROOT:-}"  && ( "$mp" == "$BACKUP_ROOT"  || "$mp" == "$BACKUP_ROOT"/*  ) ]]; then return 0; fi
+  done < <(lsblk -nro MOUNTPOINT "$disk" 2>/dev/null)
+  return 1
+}
+
 pick_device() {
   local -a devs=() rows=()
   local name size fstype label type dev base nparts
@@ -291,7 +308,7 @@ pick_device() {
     [[ "$type" == "part" || "$type" == "disk" ]] || continue
     dev="/dev/$name"
     base="$(base_disk_of "$dev")"
-    disk_is_system "$base" && continue
+    disk_is_protected "$base" && continue   # hide the box's own system/archive/backup disks
     if [[ "$type" == "disk" ]]; then
       nparts="$(lsblk -rno NAME "$dev" 2>/dev/null | tail -n +2 | wc -l)"
       [[ "$nparts" -gt 0 ]] && continue   # list its partitions instead of the bare disk
@@ -318,8 +335,10 @@ if [[ -z "$dev" ]]; then dev="$(pick_device)" || exit 1; fi
 [[ -b "$dev" ]] || { err "Not a block device: $dev"; exit 1; }
 
 base="$(base_disk_of "$dev")"
-if disk_is_system "$base"; then
-  err "REFUSING: $dev is on the system disk ($base). Never write-block or mount the OS disk."
+if disk_is_protected "$base"; then
+  err "REFUSING: $dev is on a PROTECTED disk ($base) — the box's system, archive, or backup volume."
+  err "Those are the box's OWN disks; write-blocking or mounting one would break the live archive."
+  err "Pick the SOURCE drive you plugged in instead (it will NOT be one of the box's own disks)."
   exit 1
 fi
 
