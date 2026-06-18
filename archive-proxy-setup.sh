@@ -176,6 +176,37 @@ HTMLCARD
   notes_dns="$(printf '        %-16s -> %s' "${DOCMOST_HOST}" "${lan_ip:-<mini-PC IP>}")"
 fi
 
+# Direct-access buttons (LAN IP + Tailscale IP) under the tiles for the apps that are actually
+# published on the network AND carry their own auth: Photos (Immich) and Documents (Paperless) keep
+# their own login, and Search keeps the family password (on its WEBUI_PORT front). These work with no
+# DNS at all. The other tiles (Files/PDF/Notes) stay name-only on purpose — their password lives at
+# the Caddy front door, so a direct IP:port would BYPASS it; reach those via the *.home names once the
+# AdGuard rewrites below are set.
+ts_ip=""
+if command -v tailscale >/dev/null 2>&1; then ts_ip="$(tailscale ip -4 2>/dev/null | head -1 || true)"; fi
+IMMICH_PORT="${IMMICH_UPSTREAM##*:}"
+PAPERLESS_PORT="${PAPERLESS_UPSTREAM##*:}"
+WEBUI_PORT="${WEBUI_PORT:-8080}"   # password-protected search web UI (set up by archive-webui-setup.sh)
+# Only offer the direct Search buttons if that web UI is actually listening (it is optional/separate).
+webui_present=false
+if command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${WEBUI_PORT}$"; then
+  webui_present=true
+fi
+
+# Build a small row of "LAN <ip:port>" / "Tailscale <ip:port>" links for a given port.
+iplinks_row() {  # $1 = port; prints a <div class="iplinks">..</div>, or nothing if no IP is known
+  local port="$1" row=""
+  [[ -n "$lan_ip" ]] && row+="<a class=\"ip\" href=\"http://${lan_ip}:${port}/\">🏠 LAN ${lan_ip}:${port}</a>"
+  [[ -n "$ts_ip"  ]] && row+="<a class=\"ip\" href=\"http://${ts_ip}:${port}/\">🔒 Tailscale ${ts_ip}:${port}</a>"
+  [[ -n "$row" ]] && printf '    <div class="iplinks">%s</div>' "$row"
+  return 0
+}
+photos_iplinks="$(iplinks_row "$IMMICH_PORT")"
+docs_iplinks="$(iplinks_row "$PAPERLESS_PORT")"
+search_iplinks=""
+[[ "$webui_present" == true ]] && search_iplinks="$(iplinks_row "$WEBUI_PORT")"
+info "Direct app buttons → LAN ${lan_ip:-<unknown>}${ts_ip:+, Tailscale ${ts_ip}} (Photos/Documents${webui_present:+/Search})."
+
 # ---- Portal page -----------------------------------------------------------------------------
 log "Writing the portal page to ${PORTAL_DIR}"
 sudo mkdir -p "$PORTAL_DIR"
@@ -200,6 +231,10 @@ sudo tee "$PORTAL_DIR/index.html" >/dev/null <<HTML
   a.card:hover { background:#222732; transform:translateY(-1px); }
   .emoji { font-size:1.9rem; line-height:1; }
   .desc { font-size:.85rem; font-weight:400; color:#9aa0a6; }
+  .iplinks { display:flex; flex-wrap:wrap; gap:.5rem; margin:-.4rem 0 .2rem; justify-content:center; }
+  a.ip { font-size:.78rem; font-weight:500; text-decoration:none; color:#9aa0a6;
+         background:#15181e; border:1px solid #2a2e36; border-radius:8px; padding:.3rem .6rem; }
+  a.ip:hover { background:#222732; color:#e8eaed; }
   footer { color:#5f6368; font-size:.8rem; }
 </style>
 </head>
@@ -211,10 +246,13 @@ sudo tee "$PORTAL_DIR/index.html" >/dev/null <<HTML
   <div class="grid">
     <a class="card" href="http://${PHOTOS_HOST}/"><span class="emoji">🖼️</span>
       <span>Photos &amp; Videos<br><span class="desc">browse the photo timeline</span></span></a>
+${photos_iplinks}
     <a class="card" href="http://${DOCS_HOST}/"><span class="emoji">📄</span>
       <span>Documents<br><span class="desc">scanned papers, PDFs, letters</span></span></a>
+${docs_iplinks}
     <a class="card" href="http://${SEARCH_HOST}/"><span class="emoji">🔎</span>
       <span>Search Everything<br><span class="desc">find any file by word or name</span></span></a>
+${search_iplinks}
 ${files_card}
 ${pdf_card}
 ${notes_card}
@@ -344,8 +382,10 @@ ${notes_dns}
         http://${PHOTOS_HOST}/     http://${DOCS_HOST}/     http://${SEARCH_HOST}/
 
     Notes:
-      - The portal also loads at  http://${lan_ip:-<mini-PC IP>}/  right now (before DNS), but its
-        buttons need the names above to resolve.
+      - The portal also loads at  http://${lan_ip:-<mini-PC IP>}/  right now, before any DNS. Photos,
+        Documents and Search show direct "LAN" and "Tailscale" buttons there that work without DNS
+        (each keeps its own login / the family password); the Files/PDF/Notes name-buttons still need
+        the rewrites above to resolve.
       - Paperless: so its login works under the new name, set in /srv/apps/paperless/docker-compose.env
           PAPERLESS_URL=http://${DOCS_HOST}
         then:  cd /srv/apps/paperless && sudo docker compose up -d
