@@ -16,6 +16,9 @@
 #
 set -uo pipefail
 
+# Where this script (and its sibling *-setup.sh) live — used to detect "stale install" drift below.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # ---- settings (the same files the other tools read) ------------------------------------------
 for _cfg in /etc/archive-ingest.conf "${XDG_CONFIG_HOME:-$HOME/.config}/archive-ingest.conf"; do
   # shellcheck source=/dev/null
@@ -256,7 +259,31 @@ for cmd in safe-mount ingest-verify archive-verify archive archive-index archive
   if have "$cmd"; then :; else no "Command '${cmd}' is not installed."; fix "run ${from[$cmd]}"; missing=$((missing+1)); fi
 done
 (( missing == 0 )) && ok "All core commands are installed."
-note "After a 'git pull', re-run the matching *-setup.sh to refresh installed commands (they don't update on their own)."
+
+# Version drift (the "stale-install trap"): a git pull updates these repo files but NOT the commands
+# already in /usr/local/bin. When run from the checkout, flag any setup script that is newer than the
+# command(s) it installed, so an out-of-date command can't masquerade as current. Warning only — the
+# fix (re-run the setup) is always safe and idempotent. Skipped for non-git copies (e.g. a ZIP).
+if [[ -d "$SCRIPT_DIR/.git" ]]; then
+  declare -A _drift_seen=()
+  _drift_checked=0; _drift_found=0
+  for cmd in "${!from[@]}"; do
+    s="${from[$cmd]}"
+    have "$cmd" || continue
+    [[ -f "$SCRIPT_DIR/$s" ]] || continue
+    _drift_checked=1
+    cmt="$(stat -c %Y "$(command -v "$cmd")" 2>/dev/null || echo 0)"
+    smt="$(stat -c %Y "$SCRIPT_DIR/$s" 2>/dev/null || echo 0)"
+    if (( smt > cmt )) && [[ -z "${_drift_seen[$s]:-}" ]]; then
+      wn "${s} is newer than its installed command(s) — they may be out of date (stale-install trap)."
+      fix "refresh them: ./manage.sh → Update   (or: bash ${s})"
+      _drift_seen[$s]=1; _drift_found=1
+    fi
+  done
+  (( _drift_checked == 1 && _drift_found == 0 )) && ok "Installed commands match the repo (no stale-install drift)."
+else
+  note "After a 'git pull', re-run the matching *-setup.sh to refresh installed commands (they don't update on their own)."
+fi
 
 # ---- summary ---------------------------------------------------------------------------------
 printf '\n%s────────── summary ──────────%s\n' "$c_cyn" "$c_rst"

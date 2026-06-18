@@ -416,6 +416,7 @@ done
 ARCHIVE_ROOT="${ARCHIVE_ROOT:-/srv/archive}"
 REQUIRE_MOUNTED_DEST="${REQUIRE_MOUNTED_DEST:-true}"
 MIN_FREE_GIB="${MIN_FREE_GIB:-10}"
+MAX_ARCHIVE_GIB="${MAX_ARCHIVE_GIB:-1800}"
 
 c_red=$'\033[1;31m'; c_grn=$'\033[1;32m'; c_yel=$'\033[1;33m'; c_cyn=$'\033[0;36m'; c_rst=$'\033[0m'
 ok()   { printf '%s%s%s\n' "$c_grn" "$*" "$c_rst"; }
@@ -480,6 +481,16 @@ if (( avail < need + floor )); then
   exit 1
 fi
 echo "Destination free: $(h "$avail") (keeping >= ${MIN_FREE_GIB} GiB free) — sufficient."
+
+# Soft-cap heads-up (a policy limit, NOT a hard stop): if this copy would take the archive volume
+# to/over MAX_ARCHIVE_GIB, say so now — at the moment it grows — but never block. Uses df (instant);
+# 'archive-storage' reports the precise, index-excluded figure.
+cap_b=$(( MAX_ARCHIVE_GIB * 1024 * 1024 * 1024 ))
+used_b="$(df -PB1 "$dest_parent" | awk 'NR==2{print $3}')"; used_b="${used_b:-0}"
+after_b=$(( used_b + src_bytes ))
+if   (( after_b >= cap_b ));          then warn "After this copy the archive will be ~$(h "$after_b"), OVER the ${MAX_ARCHIVE_GIB} GiB soft cap. Consider adding storage or raising MAX_ARCHIVE_GIB ('archive-storage' shows exact usage)."
+elif (( after_b * 10 >= cap_b * 9 )); then warn "After this copy the archive will be within 10% of the ${MAX_ARCHIVE_GIB} GiB soft cap ('archive-storage' shows exact usage)."
+fi
 
 dest="${dest_parent}/$(date +%Y%m%d-%H%M%S)"
 # Payload goes in data/; our own SHA256SUMS / PROVENANCE.txt / .INCOMPLETE live one level up in

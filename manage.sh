@@ -144,7 +144,8 @@ do_uninstall() {
     for c in safe-mount ingest-verify archive-verify archive archive-index archive-search archive-find archive-storage archive-backup archive-webui-run; do
       sudo rm -f "/usr/local/bin/$c"
     done
-    ok "Removed the /usr/local/bin commands."
+    sudo rm -f /etc/update-motd.d/50-memorial-archive   # the login health banner (installed with storage)
+    ok "Removed the /usr/local/bin commands and the login banner."
   fi
 
   if [[ -f /etc/systemd/system/archive-webui.service ]] && confirm "Stop & remove the search web UI service?"; then

@@ -518,6 +518,63 @@ sudo chmod +x /usr/local/bin/archive-storage
 log "Creating the backup mountpoint"
 sudo mkdir -p "$BACKUP_ROOT"
 
+log "Installing the login health banner (/etc/update-motd.d)"
+# A fast, read-only at-a-glance health line shown on every SSH login, so disk-space / soft-cap /
+# backup-freshness problems surface WITHOUT having to run archive-doctor. df/stat/findmnt only
+# (never du), with a timeout around the backup share so a stale mount can't slow a login.
+sudo mkdir -p /etc/update-motd.d
+sudo tee /etc/update-motd.d/50-memorial-archive >/dev/null <<'MOTD'
+#!/usr/bin/env bash
+# 50-memorial-archive — at-a-glance archive health at login. Installed by archive-storage-setup.sh.
+# READ-ONLY and fast (df/stat/findmnt only, never du) so it never slows a login. Remove it via the
+# manage.sh Uninstall, or:  sudo rm -f /etc/update-motd.d/50-memorial-archive
+if [[ -r /etc/archive-ingest.conf ]]; then
+  # shellcheck source=/dev/null
+  . /etc/archive-ingest.conf 2>/dev/null || true
+fi
+ARCHIVE_ROOT="${ARCHIVE_ROOT:-/srv/archive}"
+BACKUP_ROOT="${BACKUP_ROOT:-/srv/backup}"
+MAX_ARCHIVE_GIB="${MAX_ARCHIVE_GIB:-1800}"
+MIN_FREE_GIB="${MIN_FREE_GIB:-10}"
+BACKUP_STALE_DAYS="${BACKUP_STALE_DAYS:-30}"
+if [[ -t 1 ]]; then r=$'\033[1;31m'; g=$'\033[1;32m'; y=$'\033[1;33m'; c=$'\033[0;36m'; d=$'\033[2m'; z=$'\033[0m'
+else r=''; g=''; y=''; c=''; d=''; z=''; fi
+h(){ numfmt --to=iec "${1:-0}" 2>/dev/null || printf '%sB' "${1:-0}"; }
+is_mount(){ [[ "$(findmnt -no TARGET -T "$1" 2>/dev/null)" == "$1" ]]; }
+
+printf '\n%sMemorial Archive%s — health\n' "$c" "$z"
+
+# Archive volume: lead with free space (exact); flag soft-cap proximity. df only — instant.
+if is_mount "$ARCHIVE_ROOT"; then
+  total=0; used=0; avail=0
+  read -r total used avail < <(df -PB1 "$ARCHIVE_ROOT" 2>/dev/null | awk 'NR==2{print $2, $3, $4}')
+  cap=$(( MAX_ARCHIVE_GIB * 1024*1024*1024 )); floor=$(( MIN_FREE_GIB * 1024*1024*1024 ))
+  if   (( avail < floor ));    then printf '  %s✗ archive: only %s free — under the %s GiB floor%s\n' "$r" "$(h "$avail")" "$MIN_FREE_GIB" "$z"
+  elif (( used >= cap ));      then printf '  %s✗ archive: OVER the %s GiB soft cap (%s free) — add storage or raise MAX_ARCHIVE_GIB%s\n' "$r" "$MAX_ARCHIVE_GIB" "$(h "$avail")" "$z"
+  elif (( used*10 >= cap*9 )); then printf '  %s! archive: within 10%% of the %s GiB soft cap (%s free)%s\n' "$y" "$MAX_ARCHIVE_GIB" "$(h "$avail")" "$z"
+  else                              printf '  %s✓%s archive: %s free of %s (soft cap %s GiB)\n' "$g" "$z" "$(h "$avail")" "$(h "$total")" "$MAX_ARCHIVE_GIB"
+  fi
+else
+  printf '  %s✗ archive: NOT mounted at %s%s\n' "$r" "$ARCHIVE_ROOT" "$z"
+fi
+
+# Backup freshness: findmnt (safe — reads the kernel mount table) to detect the mount, then a
+# timeout'd stat of the marker so a stale/unreachable share can never hang the login.
+if is_mount "$BACKUP_ROOT"; then
+  mts="$(timeout 3 stat -c %Y "$BACKUP_ROOT/.archive-backup.verified" 2>/dev/null)"
+  if [[ -n "${mts:-}" ]]; then
+    age=$(( ( $(date +%s) - mts ) / 86400 ))
+    if (( age > BACKUP_STALE_DAYS )); then printf '  %s! backup: last verified %s day(s) ago (> %s)%s\n' "$y" "$age" "$BACKUP_STALE_DAYS" "$z"
+    else printf '  %s✓%s backup: verified %s day(s) ago\n' "$g" "$z" "$age"; fi
+  else
+    printf '  %s! backup: no verified backup yet%s\n' "$y" "$z"
+  fi
+fi
+printf '%s  full check: archive-doctor.sh%s\n' "$d" "$z"
+MOTD
+sudo chmod +x /etc/update-motd.d/50-memorial-archive
+info "Login banner installed — shows on SSH login. Preview now: run-parts /etc/update-motd.d"
+
 log "Storage tools installed."
 cat <<EOF
     See the layout and health any time:
