@@ -510,6 +510,14 @@ The CI jobs are pinned to `ubuntu-24.04` so the `shellcheck` (0.9.0) matches the
 scripts are kept clean against. If you add a script or an embedded command, no wiring is needed —
 the checks discover every `*.sh`/`ci/*.sh` and every `/usr/local/bin/<cmd>` heredoc automatically.
 
+A separate **weekly** workflow (`.github/workflows/version-audit.yml`, `ci/version-audit.sh`) confirms
+each app's pinned `FALLBACK_*` image tag still exists upstream — it rebuilds the exact ref each setup
+script would deploy and checks it with `skopeo list-tags` — so a release that's later yanked or
+re-tagged can't silently break a future *offline* install (the fallback only fires when the live
+"latest" lookup fails). It also runs on any PR that touches an app setup script. To avoid crying
+wolf, it **fails only on a tag the registry confirms is absent**; a repo it can't reach (offline, or
+Docker Hub rate-limiting) is reported *undetermined*, never a red build.
+
 ---
 
 ## Starting fresh: erase test data before real data
