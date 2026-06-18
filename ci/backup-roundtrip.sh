@@ -45,10 +45,19 @@ printf 'provenance\n'        > "$COPY/PROVENANCE.txt"
 printf 'rebuildable index\n' > "$A/.recoll/xapiandb"
 ( cd "$COPY" && find data -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS )
 
-bk() {  # archive-backup takes no subcommand — just run it with everything pointed at scratch.
-  ARCHIVE_ROOT="$A" BACKUP_ROOT="$B" REQUIRE_SEPARATE_BACKUP=false BACKUP_APPS=false MIN_FREE_GIB=0 \
-  XDG_CONFIG_HOME="$WORK/xdg" bash "$BK"
-}
+# Put the scratch settings in the XDG config, NOT just the environment. The command body sources
+# /etc/archive-ingest.conf and THEN the XDG one, and those plain assignments override exported env
+# vars — so on a box where the tools are installed, an /etc config would otherwise hijack
+# ARCHIVE_ROOT/BACKUP_ROOT and the drill could run against real paths. The XDG file is sourced LAST,
+# so it wins (the same isolation archive-selftest.sh uses).
+cat > "$WORK/xdg/archive-ingest.conf" <<CONF
+ARCHIVE_ROOT=$A
+BACKUP_ROOT=$B
+REQUIRE_SEPARATE_BACKUP=false
+BACKUP_APPS=false
+MIN_FREE_GIB=0
+CONF
+bk() { XDG_CONFIG_HOME="$WORK/xdg" bash "$BK"; }  # archive-backup takes no subcommand
 
 hdr "1. backup + verify (archive-backup)"
 if bk >"$WORK/b1.log" 2>&1 && [[ -f "$B/.archive-backup.verified" ]]; then

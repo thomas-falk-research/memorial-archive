@@ -419,7 +419,10 @@ else
         failc "archive-search did NOT find the scanned will by OCR (is OCR_ENABLE=true and tesseract installed?)."
       fi
     fi
-    if archive-find 'last-will*' </dev/null 2>/dev/null | grep -qi 'last-will' \
+    # Substring match (no glob metacharacters): plocate anchors a glob like 'last-will*' to the WHOLE
+    # path, so it would never match .../data/.../last-will-scan.pdf — a plain substring is what an
+    # operator types anyway. Fall back to the born-digital note when the scanned fixture is absent.
+    if archive-find 'last-will' </dev/null 2>/dev/null | grep -qi 'last-will' \
        || archive-find 'estate-notes.txt' </dev/null 2>/dev/null | grep -q 'estate-notes.txt'; then
       pass "archive-find located the will/estate documents by name."
     else

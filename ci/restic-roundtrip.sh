@@ -47,11 +47,19 @@ printf 'leaf\n'              > "$D/nested/leaf.txt"
 printf 'rebuildable index\n' > "$A/.recoll/xapiandb"    # must NOT be in the backup
 printf 'scratch-passphrase-%s\n' "$RANDOM$RANDOM$$" > "$WORK/pass"; chmod 600 "$WORK/pass"
 
-# Drive the wrapper with everything pointed at scratch (no sudo, no real config touched).
-wr() {
-  ARCHIVE_ROOT="$A" BACKUP_ROOT="$B" RESTIC_REPO="$B/restic" RESTIC_PASSWORD_FILE="$WORK/pass" \
-  REQUIRE_SEPARATE_BACKUP=false MIN_FREE_GIB=0 XDG_CONFIG_HOME="$WORK/xdg" bash "$WR" "$@"
-}
+# Drive the wrapper with everything pointed at scratch (no sudo, no real config touched). The scratch
+# settings go in the XDG config (sourced LAST by the command body), NOT just the environment: an
+# installed /etc/archive-ingest.conf is sourced first and its plain assignments would otherwise
+# override exported env vars — hijacking ARCHIVE_ROOT/BACKUP_ROOT so the drill ran against real paths.
+cat > "$WORK/xdg/archive-ingest.conf" <<CONF
+ARCHIVE_ROOT=$A
+BACKUP_ROOT=$B
+RESTIC_REPO=$B/restic
+RESTIC_PASSWORD_FILE=$WORK/pass
+REQUIRE_SEPARATE_BACKUP=false
+MIN_FREE_GIB=0
+CONF
+wr() { XDG_CONFIG_HOME="$WORK/xdg" bash "$WR" "$@"; }
 
 hdr "1. backup + verify (archive-restic backup)"
 if wr backup >"$WORK/b1.log" 2>&1 && [[ -f "$B/.archive-restic.verified" ]]; then
