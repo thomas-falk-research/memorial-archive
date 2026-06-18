@@ -122,6 +122,7 @@ archive **with verification** → eject. The expert commands behind the menu:
 ```
 safe-mount                       # pick a drive; mount it read-only behind a block-layer write-block
 ingest-verify /mnt/ingest/NAME LABEL   # verified copy into the archive (space + completeness + SHA-256)
+ingest-verify --privileged /mnt/ingest/NAME LABEL   # for Linux/Mac disks (see below)
 archive-verify                   # re-check every copy against its checksums (detect bit-rot)
 ```
 
@@ -130,6 +131,13 @@ themselves under `data/`, alongside a `SHA256SUMS` manifest and a `PROVENANCE.tx
 marked `.INCOMPLETE` until **every** source file has been copied and verified, so a partial copy is
 never mistaken for a good one. Before each copy `ingest-verify` checks there's enough room, and warns
 (without blocking) if the copy would take the archive near or over its `MAX_ARCHIVE_GIB` soft cap.
+
+**Linux or Mac source disks** (ext4/btrfs/XFS, HFS+/APFS) often have files owned by other users or
+root that your normal account can't read — a plain copy would be (correctly) refused as incomplete.
+For those, use a **privileged copy**: `ingest-verify --privileged` reads the source as root (the drive
+stays mounted read-only, so it's never modified) and writes the copy **owned by you and readable**, so
+the family's read-only serving can see every file. The guided `archive` menu detects these
+filesystems and offers it automatically; Windows drives (NTFS/exFAT) don't need it.
 
 **Read-only is enforced three ways:** desktop auto-mount is disabled, a udev rule stops USB media
 from auto-mounting, and `safe-mount` engages a verified block-layer write-block before mounting.
@@ -327,12 +335,14 @@ yet" / "no backup yet" are expected on an empty archive and clear after your fir
   latest version of its commands after a `git pull`. If an installed command (`archive-backup`,
   `archive-storage`, …) ever behaves differently from what these docs describe, an out-of-date copy is
   the likeliest cause — re-run its `*-setup.sh` first.
-- **Ingesting a native Linux disk (ext4/btrfs/XFS)?** Such a source has system files owned by root or
-  other users (even an empty disk has a root-only `lost+found`) that the unprivileged ingest user
-  can't read, so `ingest-verify` will (correctly, with a clear `rsync exit 23` message) refuse the
-  copy as incomplete rather than silently skip files. Most media here is Windows/Mac
-  (NTFS/exFAT/HFS+/APFS), which is unaffected; ingesting a Linux *system* disk needs a privileged copy
-  step that isn't wired up yet.
+- **Ingesting a native Linux disk (ext4/btrfs/XFS) or a Mac disk (HFS+/APFS)?** Such a source has
+  files owned by root or other users (even an empty Linux disk has a root-only `lost+found`) that the
+  unprivileged ingest user can't read, so a plain `ingest-verify` (correctly, with a clear `rsync exit
+  23` message) refuses the copy as incomplete rather than silently skipping files. Use a **privileged
+  copy**: `ingest-verify --privileged <src> <label>` (the guided `archive` menu offers it automatically
+  for these filesystems). It reads the source as root — the drive stays mounted read-only, so it's
+  never modified — and writes the copy owned by you and readable. Windows media (NTFS/exFAT) is
+  unaffected and doesn't need it.
 - **Tailscale on a fresh box won't finish login from a remote SSH session.** Do `sudo tailscale up`
   at the machine's own keyboard/console (complete the browser login while the command is still
   running), or pass a pre-generated `--authkey`. Once it's up you can SSH in over the tailnet.

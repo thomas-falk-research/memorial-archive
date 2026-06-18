@@ -410,9 +410,12 @@ sudo chmod +x /usr/local/bin/safe-mount
 info "writing ingest-verify"
 sudo tee /usr/local/bin/ingest-verify >/dev/null <<'SCRIPT'
 #!/usr/bin/env bash
-# ingest-verify SOURCE_DIR SOURCE_LABEL
+# ingest-verify [--privileged] SOURCE_DIR SOURCE_LABEL
 # Verified copy into the archive: space check, completeness check, SHA-256 fixity, provenance.
 # A copy stays marked .INCOMPLETE until it fully passes, so a partial master is never trusted.
+# --privileged reads the source as ROOT — for Linux/Mac disks whose files your account can't read.
+#   The source stays read-only; the copy is made owned-by-you and world-readable so the family's
+#   read-only serving (SMB / web / search) can read every file.
 set -euo pipefail
 for _cfg in /etc/archive-ingest.conf "${XDG_CONFIG_HOME:-$HOME/.config}/archive-ingest.conf"; do
   if [[ -r "$_cfg" ]]; then
@@ -436,9 +439,33 @@ for _t in rsync sha256sum numfmt find df du findmnt; do
   command -v "$_t" >/dev/null 2>&1 || { err "Required tool not found: $_t. Run the setup script first."; exit 1; }
 done
 
-src="${1:?usage: ingest-verify <source-dir> <source-label>}"
+PRIVILEGED=false; pos=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -p|--privileged) PRIVILEGED=true ;;
+    -h|--help) echo "usage: ingest-verify [--privileged] <source-dir> <source-label>"; exit 0 ;;
+    --) shift; while [[ $# -gt 0 ]]; do pos+=("$1"); shift; done; break ;;
+    -*) err "Unknown option: $1 (try --help)"; exit 2 ;;
+    *) pos+=("$1") ;;
+  esac
+  shift
+done
+set -- "${pos[@]}"
+src="${1:?usage: ingest-verify [--privileged] <source-dir> <source-label>}"
 raw="${2:?provide a short source label, e.g. dads-laptop-cdrive}"
 [[ -d "$src" ]] || { err "Source directory not found: $src"; exit 1; }
+
+# Privileged (root) read for sources whose files this account can't read (a Linux disk's system/
+# other-owned files, or a Mac disk's). Safe: the source is mounted read-only, so it can't be modified;
+# only the source scan and the copy run as root, and we normalise the COPY to be owned by us and
+# readable so the family's read-only serving can read every file.
+SUDO=()
+if [[ "$PRIVILEGED" == true ]]; then
+  command -v sudo >/dev/null 2>&1 || { err "--privileged needs sudo."; exit 1; }
+  sudo -v || { err "sudo authentication failed."; exit 1; }
+  SUDO=(sudo)
+  note "Privileged copy: reading the source as root (it stays read-only and unmodified)."
+fi
 
 label="$(printf '%s' "$raw" | tr -c 'A-Za-z0-9._-' '-' | sed 's/-\{2,\}/-/g; s/^-//; s/-$//')"
 [[ -n "$label" ]] || { err "Label is empty after sanitizing; use letters/numbers."; exit 1; }
@@ -465,8 +492,8 @@ note "Scanning source (can take a moment on large drives)..."
 # 'set -e' a non-zero find/du would otherwise abort the whole ingest with NO message. The copy step
 # (rsync) below stays the authority that REFUSES a genuinely partial/unreadable source, with a clear
 # error — so a real problem is still caught, just never silently.
-src_files="$(find "$src" -type f -printf 'x' 2>/dev/null | wc -c)" || true
-src_bytes="$(du -sb "$src" 2>/dev/null | cut -f1)" || true; src_bytes="${src_bytes:-0}"
+src_files="$("${SUDO[@]}" find "$src" -type f -printf 'x' 2>/dev/null | wc -c)" || true
+src_bytes="$("${SUDO[@]}" du -sb "$src" 2>/dev/null | cut -f1)" || true; src_bytes="${src_bytes:-0}"
 if [[ "${src_files:-0}" -eq 0 ]]; then
   err "Source has 0 files: $src"
   err "Is the drive actually mounted there?  Check:  ls -la '$src'"
@@ -518,13 +545,20 @@ fi
 
 echo "Copying..." | tee "$logf"
 set +e
-rsync -aHAX --info=progress2 "$src"/ "$data"/ 2>&1 | tee -a "$logf"
+if [[ "$PRIVILEGED" == true ]]; then
+  # Root read so other/root-owned files are all copied; normalise the copy to be owned by us and
+  # 755/644 so the read-only serving (SMB/web/search) can read everything (mtimes are preserved).
+  sudo rsync -rlptDH --chown="$(id -un):$(id -gn)" --chmod=D755,F644 --info=progress2 "$src"/ "$data"/ 2>&1 | tee -a "$logf"
+else
+  rsync -aHAX --info=progress2 "$src"/ "$data"/ 2>&1 | tee -a "$logf"
+fi
 rc=${PIPESTATUS[0]}
 set -e
 if [[ $rc -ne 0 && $rc -ne 24 ]]; then
   err "rsync exit $rc — some files could NOT be read/copied. See $logf."
   err "Copy left marked .INCOMPLETE. Likely causes: permissions, or a failing drive (image it"
   err "with ddrescue and ingest the image). Fix and re-run; do not trust this copy."
+  [[ "$PRIVILEGED" != true ]] && err "If this is a Linux/Mac disk with files your account can't read, retry: ingest-verify --privileged '$src' '$raw'"
   exit 1
 fi
 [[ $rc -eq 24 ]] && warn "rsync 24: some files vanished during copy (usually harmless for static media)."
@@ -559,7 +593,8 @@ ingested_by:  $(id -un)@$(hostname -s)
 file_count:   ${copied}
 byte_count:   ${src_bytes}
 payload:      data/  (SHA256SUMS covers every file under data/)
-tool:         ingest-verify (rsync -aHAX + sha256)
+copy_mode:    $([[ "$PRIVILEGED" == true ]] && echo "privileged (root read; owner/permissions normalised for serving)" || echo "standard (rsync -aHAX)")
+tool:         ingest-verify + sha256
 EOF
 
 rm -f "$marker"
@@ -690,7 +725,17 @@ M
        if mp="$(choose_mount)"; then
          def="$(basename "$mp")"
          read -rp "Label for this source [${def}]: " lbl
-         ingest-verify "$mp" "${lbl:-$def}" || true
+         popt=()
+         case "$(findmnt -no FSTYPE "$mp" 2>/dev/null)" in
+           ext2|ext3|ext4|btrfs|xfs|f2fs|jfs|reiserfs|hfsplus|hfs)
+             echo
+             echo "This looks like a Linux/Mac-formatted drive. Some files may be owned by other users"
+             echo "or root that your normal account can't read. A PRIVILEGED copy reads them as root —"
+             echo "the drive stays read-only, and the copy is made readable for the family."
+             read -rp "Use a privileged copy? [Y/n] " pa || pa=""
+             [[ "$pa" =~ ^[Nn] ]] || popt=(--privileged) ;;
+         esac
+         ingest-verify "${popt[@]}" "$mp" "${lbl:-$def}" || true
        fi
        pause ;;
     4) echo
