@@ -69,6 +69,7 @@ Everything is config-driven, so it adapts to other disks, paths, networks, and d
 | 14 | `archive-stirling-setup.sh` | *(optional, Docker)* **PDF tools** (Stirling-PDF): a self-hosted web app to merge, split, OCR, convert, compress and sign PDFs — on the box, nothing uploaded to the internet. No archive access (you upload files in the browser). Front-door tile at `pdf.<domain>`. | regular user w/ sudo |
 | 15 | `archive-docmost-setup.sh` | *(optional, Docker)* **Notes & memories** (Docmost): a private family wiki the family can **write** in — a biography, memories, and notes to organise the deceased's affairs. The **only read-WRITE app**, so its database is the family's own irreplaceable content and is **backed up** (DB + uploads) by `archive-backup`. Has its **own** logins (no front-door password). Serves on `:3000`. | regular user w/ sudo |
 | 16 | `archive-proxy-setup.sh` | *(optional)* One **front door**: Caddy on `:80` serves a **portal page** and routes friendly names — `photos.<domain>` → Immich, `docs.<domain>` → Paperless, `search.<domain>` → recoll, `files.<domain>` → copyparty, `pdf.<domain>` → Stirling-PDF, `docmost.<domain>` → Docmost — so the family uses memorable URLs with **no ports**. Pair with AdGuard/router DNS rewrites. | regular user w/ sudo |
+| 17 | `archive-kopia-setup.sh` | *(optional, Docker)* **Back up the family's Windows PCs onto the box** — a **Kopia repository server** (TLS, per-PC logins); each PC runs **KopiaUI** and backs up its own files (encrypted, deduplicated). Stored on the **internal** disk at `/srv/pc-backups`, separate from the archive masters and off its budget. Installs `archive-pc-backup` to add/list PCs. | regular user w/ sudo |
 
 > Run the setup scripts as your **normal user** (the one with sudo) — *not* with `sudo ./script`.
 > They call `sudo` themselves where needed and must know your real home directory.
@@ -78,7 +79,7 @@ Everything is config-driven, so it adapts to other disks, paths, networks, and d
 > those already-installed commands — so after you update the repo, **re-run the matching `*-setup.sh`**
 > to pick up the fix. Re-running is safe; every script is idempotent.
 >
-> Scripts 10–15 are the optional apps (Docker Compose stacks; czkawka is an admin tool, Docmost is read-write). Their data lives on the OS
+> Scripts 10–15 and 17 are the optional apps (Docker Compose stacks; czkawka is an admin tool, Docmost is read-write, Kopia is the PC-backup server). Their data lives on the OS
 > disk under `/srv/apps` (off the 2 TB archive budget); Immich and copyparty reference the archive
 > read-only, so the masters are never modified. Each is pinned to a specific upstream release and
 > re-runnable. Once you have more than one, `archive-apps-setup.sh` (script 8) gives you a single
@@ -363,6 +364,38 @@ Each lands beside a `RESTORE.txt` with the exact restore commands. This step is 
 an app is stopped, `archive-backup` warns but the archive backup itself stays verified. Disable it
 with `BACKUP_APPS=false` in `/etc/archive-ingest.conf`; `archive-doctor` reports when the apps were
 last backed up.
+
+---
+
+## Backing up the family's Windows PCs: Kopia
+
+The backups above all flow **outward** — the archive (the deceased's files) goes off-site. This is the
+**other direction**: the family's own **Windows PCs back up *onto* the box**, so their everyday
+documents and photos are protected too. `archive-kopia-setup.sh` makes the box a **Kopia repository
+server**; each PC runs the free **KopiaUI** app and backs itself up — **encrypted and deduplicated**,
+with dated restore points.
+
+These backups are stored on the box's **internal disk** at `/srv/pc-backups` — physically separate
+from the irreplaceable 2 TB archive masters, and off the archive's space budget. (They're *box-only*:
+unlike the archive, they aren't shipped off-site — each PC still holds its own originals, so that's two
+copies. Easy to extend later.)
+
+**On the box**, add a login per PC (it prints everything that PC needs):
+
+```
+archive-pc-backup add moms-laptop     # -> username, password, server URL + certificate fingerprint
+archive-pc-backup list                # which PCs are set up
+archive-pc-backup info                # show the URL + fingerprint again
+```
+
+**On each Windows PC**: install KopiaUI, choose **"Connect To Repository Server"**, and enter the
+server URL (`https://<box>:51515`), the **fingerprint**, and that PC's **username/password**. Set a
+backup schedule in KopiaUI and you're done. The box must be reachable on the home network (or over
+Tailscale).
+
+The repository password lives in `/srv/apps/kopia/.env` (mode `600`); like the restic passphrase it
+**cannot be reset** without orphaning the PC backups — record it off the box. `archive-credentials`
+points to it and to the `archive-pc-backup` commands; `archive-doctor` checks the server is up.
 
 ---
 

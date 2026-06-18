@@ -236,7 +236,7 @@ hdr "Family apps"
 if ! have ss; then
   note "Can't check service ports ('ss' not found)."
 else
-  for entry in "Immich:2283:immich" "Paperless:8000:paperless" "Files (copyparty):3923:copyparty" "Duplicates (czkawka):5800:czkawka" "PDF tools (Stirling):8082:stirling" "Notes (Docmost):3000:docmost"; do
+  for entry in "Immich:2283:immich" "Paperless:8000:paperless" "Files (copyparty):3923:copyparty" "Duplicates (czkawka):5800:czkawka" "PDF tools (Stirling):8082:stirling" "Notes (Docmost):3000:docmost" "PC backups (Kopia):51515:kopia"; do
     nm="${entry%%:*}"; rest="${entry#*:}"; port="${rest%%:*}"; dir="${rest#*:}"
     listening "$port"; lp=$?
     if   [[ $lp -eq 0 ]]; then ok "${nm} is responding on :${port}."
@@ -361,6 +361,7 @@ declare -A from=(
   [archive-storage]=archive-storage-setup.sh [archive-backup]=archive-storage-setup.sh
   [archive-credentials]=archive-credentials-setup.sh
   [archive-restic]=archive-restic-setup.sh
+  [archive-pc-backup]=archive-kopia-setup.sh
 )
 missing=0
 for cmd in safe-mount ingest-verify archive-verify archive archive-index archive-search archive-find archive-storage archive-backup; do

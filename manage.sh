@@ -52,6 +52,7 @@ inst_copyparty() { [[ -d /srv/apps/copyparty ]]; }
 inst_czkawka()   { [[ -d /srv/apps/czkawka ]]; }
 inst_stirling()  { [[ -d /srv/apps/stirling ]]; }
 inst_docmost()   { [[ -d /srv/apps/docmost ]]; }
+inst_kopia()     { [[ -d /srv/apps/kopia ]]; }
 inst_apps()      { have_cmd archive-apps; }
 inst_proxy()     { grep -qs 'archive-proxy-setup.sh' /etc/caddy/Caddyfile; }
 
@@ -80,6 +81,7 @@ do_install() {
   if confirm "14) PDF tools (Stirling-PDF)?";                      then run archive-stirling-setup.sh; fi
   if confirm "15) Notes & memories (Docmost, family-writable)?";   then run archive-docmost-setup.sh; fi
   if confirm "16) One-URL front door (portal + friendly names)?";  then run archive-proxy-setup.sh; fi
+  if confirm "17) Back up the family's Windows PCs onto the box (Kopia server)?"; then run archive-kopia-setup.sh; fi
   ok "Install run complete. Tip: choose 'Check health' to verify it all."
 }
 
@@ -143,6 +145,14 @@ refresh_installed() {
     run archive-docmost-setup.sh --yes
     unset DOCMOST_VERSION
   fi
+  if inst_kopia; then
+    if [[ "$mode" == "--repair" ]]; then
+      v="$(sudo sed -n 's#.*kopia/kopia:##p' /srv/apps/kopia/docker-compose.yml 2>/dev/null | head -1)"
+      [[ -n "$v" ]] && export KOPIA_VERSION="$v"
+    fi
+    run archive-kopia-setup.sh --yes
+    unset KOPIA_VERSION
+  fi
   inst_proxy && run archive-proxy-setup.sh --yes
   return 0
 }
@@ -201,17 +211,22 @@ do_uninstall() {
   fi
 
   local app
-  for app in immich paperless copyparty czkawka stirling docmost; do
+  for app in immich paperless copyparty czkawka stirling docmost kopia; do
     if [[ -d "/srv/apps/$app" ]] && confirm "Stop & remove the ${app} containers (keeps its data)?"; then
       ( cd "/srv/apps/$app" && sudo docker compose down 2>/dev/null ) || warn "could not stop ${app} (already down?)"
       ok "Stopped the ${app} containers."
     fi
   done
 
-  for app in immich paperless copyparty czkawka stirling docmost; do
+  for app in immich paperless copyparty czkawka stirling docmost kopia; do
     if [[ -d "/srv/apps/$app" ]]; then
       warn "Removing /srv/apps/${app} deletes ${app}'s OWN data (its database/thumbnails or OCR'd library)."
       warn "Your ORIGINAL files in /srv/archive are not affected."
+      if [[ "$app" == kopia ]]; then
+        warn "This INCLUDES the repository password (.env) — without it the Windows-PC backups in"
+        warn "/srv/pc-backups can NEVER be read again. Be sure you've recorded it first. (That folder"
+        warn "itself is left in place.)"
+      fi
       local a; read -rp "Type DELETE to remove /srv/apps/${app}, or press Enter to keep it: " a || true
       if [[ "$a" == "DELETE" ]]; then sudo rm -rf "/srv/apps/${app}"; ok "Removed /srv/apps/${app}."; else say "Kept /srv/apps/${app}."; fi
     fi
