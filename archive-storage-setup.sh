@@ -88,6 +88,7 @@ REQUIRE_SEPARATE_BACKUP="${REQUIRE_SEPARATE_BACKUP:-true}"
 APPS_ROOT="${APPS_ROOT:-/srv/apps}"
 IMMICH_DIR="${IMMICH_DIR:-$APPS_ROOT/immich}"
 PAPERLESS_DIR="${PAPERLESS_DIR:-$APPS_ROOT/paperless}"
+DOCMOST_DIR="${DOCMOST_DIR:-$APPS_ROOT/docmost}"
 BACKUP_APPS="${BACKUP_APPS:-true}"
 
 c_red=$'\033[1;31m'; c_grn=$'\033[1;32m'; c_yel=$'\033[1;33m'; c_cyn=$'\033[0;36m'; c_rst=$'\033[0m'
@@ -143,6 +144,35 @@ regenerates them). The deceased's photos themselves live in the read-only archiv
 (Adjust the paths if you changed APPS_ROOT.)
 TXT
 }
+write_restore_docmost() {
+  mkdir -p "$1"
+  cat > "$1/RESTORE.txt" <<'TXT'
+Restoring Docmost (the family's notes / wiki — your own writing)
+================================================================
+This is the one app the family WRITES in, so this is real, irreplaceable data. Two files:
+  - 'docmost-database.sql.gz' — a PostgreSQL dump of every page, space, comment and account.
+  - 'docmost-storage.tar'     — the uploaded attachments and images.
+
+You do NOT need the old secrets to restore: a fresh install creates a new database user from its
+own .env, and this dump only carries your content. (A new APP_SECRET just means everyone signs in
+again — the pages themselves are safe.)
+
+  *** Versions matter — skim Docmost's current docs first: https://docmost.com/docs ***
+
+  1. Set Docmost up again:   ./manage.sh  ->  Install  ->  Notes (Docmost)
+  2. Restore the database (load it with the app stopped so nothing writes while it imports):
+       cd /srv/apps/docmost
+       sudo docker compose stop docmost
+       gunzip < docmost-database.sql.gz | sudo docker compose exec -T db psql --username=docmost --dbname=docmost
+  3. Restore the uploaded attachments/images:
+       sudo docker compose start docmost
+       sudo docker compose exec -T docmost tar -C /app/data/storage -xf - < docmost-storage.tar
+  4. Restart so the app picks up the restored data:
+       sudo docker compose restart docmost
+
+(Adjust the paths if you changed APPS_ROOT.)
+TXT
+}
 
 # ---- app data backup (best-effort; never fails or un-verifies the archive backup above) -------
 # Immich and Paperless keep state OUTSIDE the archive, so backing up /srv/archive alone cannot
@@ -156,7 +186,7 @@ backup_apps() {
 
   # The per-app tools below send their output to the log, not the screen, so without a heads-up the
   # run looks frozen. Announce it, and prime sudo up front (visibly) so a later sudo can't block.
-  if [[ -f "$PAPERLESS_DIR/docker-compose.yml" || -f "$IMMICH_DIR/docker-compose.yml" ]]; then
+  if [[ -f "$PAPERLESS_DIR/docker-compose.yml" || -f "$IMMICH_DIR/docker-compose.yml" || -f "$DOCMOST_DIR/docker-compose.yml" ]]; then
     note "Backing up the family apps' own data — this can take a minute; details go to ${logf}"
     sudo -v || warn "Couldn't pre-authorize sudo; the app-data steps may prompt or be skipped."
   fi
@@ -228,8 +258,64 @@ backup_apps() {
     write_restore_immich "$appdst/immich"
   fi
 
+  # --- Docmost: the family's OWN writing (notes/wiki) — the one read-WRITE app, so irreplaceable --
+  # pg_dump of the single 'docmost' database (data only) is enough: a fresh install recreates the
+  # role from its .env, so we needn't back up secrets — only content. Uploads live in a named volume,
+  # streamed out as a tar from inside the container (no need to know the project-prefixed name).
+  if [[ -f "$DOCMOST_DIR/docker-compose.yml" ]]; then
+    any=true
+    note "Backing up Docmost (database dump + uploaded attachments)..."
+    if ! command -v gzip >/dev/null 2>&1; then
+      err "  Docmost: gzip not found — cannot compress the DB dump."; rc_any=1
+    else
+      local dtmp ddumpf dsz
+      dtmp="$(mktemp -d)"; ddumpf="$dtmp/docmost-database.sql.gz"
+      if ( cd "$DOCMOST_DIR" && sudo docker compose exec -T db pg_dump --clean --if-exists --username=docmost docmost ) </dev/null 2>>"$logf" | gzip > "$ddumpf"; then
+        dsz="$(stat -c%s "$ddumpf" 2>/dev/null || echo 0)"
+        if gzip -t "$ddumpf" 2>/dev/null && (( dsz > 1024 )); then
+          mkdir -p "$appdst/docmost"
+          local ddrc
+          rsync -rlt --modify-window=2 "$ddumpf" "$appdst/docmost/" >>"$logf" 2>&1; ddrc=$?
+          if [[ $ddrc -eq 0 || $ddrc -eq 23 || $ddrc -eq 24 ]]; then   # tolerate CIFS rc 23/24 like the others
+            ok "  Docmost: database dumped, verified ($(h "$dsz")) and copied."
+          else
+            err "  Docmost: copying the DB dump to the backup failed (rsync rc=$ddrc)."; rc_any=1
+          fi
+        else
+          err "  Docmost: the DB dump failed its integrity test or was empty — not trusting it."; rc_any=1
+        fi
+      else
+        err "  Docmost: could not dump the database (is the 'db' container up?)."; rc_any=1
+      fi
+      rm -rf "$dtmp"
+    fi
+
+    # Uploaded attachments/images (the 'docmost_storage' named volume), streamed out as a tar and
+    # verified by listing it. An empty store still makes a valid (tiny) tar — that's fine.
+    local utmp utar usz urc
+    utmp="$(mktemp -d)"; utar="$utmp/docmost-storage.tar"
+    if ( cd "$DOCMOST_DIR" && sudo docker compose exec -T docmost tar -C /app/data/storage -cf - . ) </dev/null >"$utar" 2>>"$logf"; then
+      usz="$(stat -c%s "$utar" 2>/dev/null || echo 0)"
+      if tar -tf "$utar" >/dev/null 2>&1 && (( usz > 0 )); then
+        mkdir -p "$appdst/docmost"
+        rsync -rlt --modify-window=2 "$utar" "$appdst/docmost/" >>"$logf" 2>&1; urc=$?
+        if [[ $urc -eq 0 || $urc -eq 23 || $urc -eq 24 ]]; then
+          ok "  Docmost: uploaded attachments archived ($(h "$usz")) and copied."
+        else
+          err "  Docmost: copying the uploads archive to the backup failed (rsync rc=$urc)."; rc_any=1
+        fi
+      else
+        err "  Docmost: the uploads archive was empty or unreadable — not trusting it."; rc_any=1
+      fi
+    else
+      err "  Docmost: could not archive uploaded attachments (is the 'docmost' container up?)."; rc_any=1
+    fi
+    rm -rf "$utmp"
+    write_restore_docmost "$appdst/docmost"
+  fi
+
   if [[ "$any" != true ]]; then
-    note "No family apps (Immich/Paperless) installed — nothing extra to back up."
+    note "No family apps (Immich/Paperless/Docmost) installed — nothing extra to back up."
     return 0
   fi
   mkdir -p "$appdst"
@@ -592,6 +678,6 @@ cat <<EOF
 
     Optional settings in /etc/archive-ingest.conf: BACKUP_ROOT, MAX_ARCHIVE_GIB (soft cap, default
     1800), REQUIRE_SEPARATE_BACKUP (default true — refuse to "back up" onto the same disk),
-    BACKUP_APPS (default true — set false to skip the Immich/Paperless app-data backup).
+    BACKUP_APPS (default true — set false to skip the Immich/Paperless/Docmost app-data backup).
     Tip: attach the tailnet share first ('archive-storage attach-backup'), then run 'archive-backup'.
 EOF

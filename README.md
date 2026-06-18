@@ -65,7 +65,8 @@ Everything is config-driven, so it adapts to other disks, paths, networks, and d
 | 10 | `archive-copyparty-setup.sh` | *(optional, Docker)* **Read-only web file browser** (copyparty): browse and download *any* file in the archive from a phone/computer browser — no app, no SMB setup. Archive bind-mounted **read-only**; listens on loopback only (publish it via the front door). | regular user w/ sudo |
 | 11 | `archive-czkawka-setup.sh` | *(optional, Docker)* **Find duplicates** (czkawka, GUI in the browser): spot duplicate and visually-similar files across the archive even when they're named/timestamped differently. Archive mounted **read-only** (it finds, it can never delete); an admin tool, behind the front-door password at `dupes.<domain>`. | regular user w/ sudo |
 | 12 | `archive-stirling-setup.sh` | *(optional, Docker)* **PDF tools** (Stirling-PDF): a self-hosted web app to merge, split, OCR, convert, compress and sign PDFs — on the box, nothing uploaded to the internet. No archive access (you upload files in the browser). Front-door tile at `pdf.<domain>`. | regular user w/ sudo |
-| 13 | `archive-proxy-setup.sh` | *(optional)* One **front door**: Caddy on `:80` serves a **portal page** and routes friendly names — `photos.<domain>` → Immich, `docs.<domain>` → Paperless, `search.<domain>` → recoll, `files.<domain>` → copyparty, `pdf.<domain>` → Stirling-PDF — so the family uses memorable URLs with **no ports**. Pair with AdGuard/router DNS rewrites. | regular user w/ sudo |
+| 13 | `archive-docmost-setup.sh` | *(optional, Docker)* **Notes & memories** (Docmost): a private family wiki the family can **write** in — a biography, memories, and notes to organise the deceased's affairs. The **only read-WRITE app**, so its database is the family's own irreplaceable content and is **backed up** (DB + uploads) by `archive-backup`. Has its **own** logins (no front-door password). Serves on `:3000`. | regular user w/ sudo |
+| 14 | `archive-proxy-setup.sh` | *(optional)* One **front door**: Caddy on `:80` serves a **portal page** and routes friendly names — `photos.<domain>` → Immich, `docs.<domain>` → Paperless, `search.<domain>` → recoll, `files.<domain>` → copyparty, `pdf.<domain>` → Stirling-PDF, `docmost.<domain>` → Docmost — so the family uses memorable URLs with **no ports**. Pair with AdGuard/router DNS rewrites. | regular user w/ sudo |
 
 > Run the setup scripts as your **normal user** (the one with sudo) — *not* with `sudo ./script`.
 > They call `sudo` themselves where needed and must know your real home directory.
@@ -75,7 +76,7 @@ Everything is config-driven, so it adapts to other disks, paths, networks, and d
 > those already-installed commands — so after you update the repo, **re-run the matching `*-setup.sh`**
 > to pick up the fix. Re-running is safe; every script is idempotent.
 >
-> Scripts 8–12 are the optional apps (Docker Compose stacks; czkawka is an admin tool). Their data lives on the OS
+> Scripts 8–13 are the optional apps (Docker Compose stacks; czkawka is an admin tool, Docmost is read-write). Their data lives on the OS
 > disk under `/srv/apps` (off the 2 TB archive budget); Immich and copyparty reference the archive
 > read-only, so the masters are never modified. Each is pinned to a specific upstream release and
 > re-runnable. Once you have more than one, `archive-apps-setup.sh` (script 6) gives you a single
@@ -101,7 +102,7 @@ It inspects storage and mounts — including the things that **break silently**:
 landed on the **same disk** as the archive, a full OS disk, missing `fstab` `nofail`, loose
 credential/permission bits, and (best-effort) disk **SMART** health. It also checks the archive's
 `.INCOMPLETE`/checksum integrity, the on-site/off-site backup (and how fresh it is), the search index,
-the family apps (Immich/Paperless) and the Caddy front door, the friendly `.home` names, and the
+the family apps (Immich/Paperless/Docmost/…) and the Caddy front door, the friendly `.home` names, and the
 installed commands (flagging any that are out of date versus the repo — the *stale-install trap*) —
 and prints a plain-English ✓ / ! / ✗ for each, with a concrete **fix** for anything that isn't right.
 It changes nothing, so it is always safe to run. (Its exit code is non-zero if any check failed, so a
@@ -257,6 +258,29 @@ view. czkawka's own guide:
 
 ---
 
+## Family notes & memories: `docmost`
+
+Everything else in this suite is **read-only** — it preserves what already exists. `docmost` is the
+one place the family **writes**: a private wiki for a biography, shared memories, and the practical
+notes that come with settling someone's affairs (accounts to close, documents to find, to-dos).
+`archive-docmost-setup.sh` deploys **Docmost** with its own PostgreSQL + Redis under `/srv/apps/docmost`.
+
+Because it is read-write, its database **is** the data — it can't be rebuilt from the archive — so
+`archive-backup` dumps it (see below). A few deliberate choices:
+
+- **Its own logins.** Each family member gets an account, so — unlike search/files — it sits behind
+  the front door **without** the shared family password. Reached at `http://docmost.<domain>/`.
+- **Set it up in order.** Run the front door first, then open `http://docmost.<domain>/` and **create
+  the admin account promptly** (the first account becomes the owner), then set the workspace to
+  invite-only and invite the family.
+- **No archive access.** It only ever touches its own data under `/srv/apps/docmost`; the masters in
+  `/srv/archive` are untouched.
+
+Secrets (the app secret + DB password) live in `/srv/apps/docmost/.env` (mode `600`) and are reused
+on every re-run, so updates never lock the app out of its database or log everyone out.
+
+---
+
 ## Backups
 
 ```
@@ -269,16 +293,18 @@ archive-backup                   # verified, additive backup to /srv/backup; re-
 `archive-backup` never deletes from the backup, refuses to "back up" onto the same disk as the
 archive, and is only declared good once every destination checksum verifies.
 
-### Immich and Paperless data is backed up too
+### App data (Immich, Paperless, Docmost) is backed up too
 
 Those apps keep their own data **outside** the archive — Paperless stores its OCR'd documents, tags
-and metadata; Immich stores albums, people/faces and any photos uploaded from a phone — so a backup
-of `/srv/archive` alone would not bring them back. `archive-backup` therefore **also** backs up each
-installed app, into `/srv/backup/apps/`:
+and metadata; Immich stores albums, people/faces and any photos uploaded from a phone; Docmost stores
+the family's own writing — so a backup of `/srv/archive` alone would not bring them back.
+`archive-backup` therefore **also** backs up each installed app, into `/srv/backup/apps/`:
 
 - **Paperless** → its own `document_exporter` (documents + OCR text + tags + `manifest.json`).
 - **Immich** → a full database dump (albums/people/tags) plus any uploaded originals (regenerable
   thumbnails and transcodes are skipped).
+- **Docmost** → a PostgreSQL dump of every page/space/comment/account, plus the uploaded
+  attachments. (Its content survives a fresh install on its own; you don't need the old secrets.)
 
 Each lands beside a `RESTORE.txt` with the exact restore commands. This step is **best-effort**: if
 an app is stopped, `archive-backup` warns but the archive backup itself stays verified. Disable it
