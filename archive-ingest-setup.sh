@@ -725,6 +725,24 @@ M
        if mp="$(choose_mount)"; then
          def="$(basename "$mp")"
          read -rp "Label for this source [${def}]: " lbl
+         src="$mp"
+         # Windows system disk? The family's files live under Users\; the rest is Windows itself.
+         # Offer to copy just Users\ so the masters aren't filled with the OS. We point the copy at
+         # the subfolder (not an exclude list), so the completeness gate + checksums still cover
+         # every file under it. (A separate data partition / external drive has no Users+Windows pair,
+         # so this never triggers there — those are copied whole.)
+         if [[ -d "$mp/Users" ]] && { [[ -d "$mp/Windows" ]] || [[ -d "$mp/Program Files" ]]; }; then
+           echo "This looks like a Windows system disk. The family's files normally live in the"
+           echo "Users folder; the rest is Windows itself (the operating system and installed programs)."
+           read -rp "Copy just the Users folder (recommended — skips the Windows system files)? [Y/n] " wu || wu=""
+           if [[ ! "$wu" =~ ^[Nn] ]]; then
+             src="$mp/Users"
+             echo "Will copy only: $src"
+             echo "(If this drive also has important files OUTSIDE Users — say a D: drive folder — answer"
+             echo " 'n' to copy the whole drive, or ingest those folders separately so none are missed.)"
+           fi
+           echo
+         fi
          popt=()
          case "$(findmnt -no FSTYPE "$mp" 2>/dev/null)" in
            ext2|ext3|ext4|btrfs|xfs|f2fs|jfs|reiserfs|hfsplus|hfs)
@@ -735,7 +753,7 @@ M
              read -rp "Use a privileged copy? [Y/n] " pa || pa=""
              [[ "$pa" =~ ^[Nn] ]] || popt=(--privileged) ;;
          esac
-         ingest-verify "${popt[@]}" "$mp" "${lbl:-$def}" || true
+         ingest-verify "${popt[@]}" "$src" "${lbl:-$def}" || true
        fi
        pause ;;
     4) echo
