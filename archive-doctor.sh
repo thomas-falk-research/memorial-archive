@@ -4,9 +4,10 @@
 #
 # It inspects everything the suite sets up — storage and mounts (including writability, a read-only
 # remount, fstab 'nofail', free space and disk SMART health), the archive and its integrity markers,
-# the on-site/off-site backup, file permissions and credentials, the search index, the family apps
-# (Immich, Paperless), the Caddy front door and friendly .home names, and the installed commands —
-# and prints a plain-English check for each, with a concrete "fix:" next step for anything wrong.
+# the on-site/off-site backup and the Kopia PC-backup disk, file/secret permissions and credentials
+# (incl. the two unrecoverable secrets), the search index, the family apps (Immich, Paperless, …), the
+# Caddy front door and friendly .home names, and the installed commands — and prints a plain-English
+# check for each, with a concrete "fix:" next step for anything wrong.
 #
 # It NEVER changes anything, so it is always safe to run — especially right after setup or an update:
 #
@@ -28,6 +29,7 @@ done
 ARCHIVE_ROOT="${ARCHIVE_ROOT:-/srv/archive}"
 BACKUP_ROOT="${BACKUP_ROOT:-/srv/backup}"
 APPS_ROOT="${APPS_ROOT:-/srv/apps}"
+PCBACKUP_DIR="${PCBACKUP_DIR:-/srv/pc-backups}"
 MAX_ARCHIVE_GIB="${MAX_ARCHIVE_GIB:-1800}"
 MIN_FREE_GIB="${MIN_FREE_GIB:-10}"
 BASE_DOMAIN="${BASE_DOMAIN:-home}"
@@ -56,6 +58,17 @@ listening() {  # $1 = port. return 0 = yes, 1 = no, 2 = can't tell
 }
 http_code() {  # $1 = hostname, resolved to 127.0.0.1 so we test the front door regardless of DNS
   curl -s -o /dev/null -m 6 -w '%{http_code}' --resolve "$1:80:127.0.0.1" "http://$1/" 2>/dev/null || echo 000
+}
+check_secret() {  # $1 = path to a secret file, $2 = human label. Warn loudly if others can read it.
+  local f="$1" lbl="$2" perm                       # stat reads metadata via dir traversal — no sudo.
+  [[ -e "$f" ]] || return 0
+  perm="$(stat -c '%a' "$f" 2>/dev/null)"
+  if   [[ -z "$perm" ]]; then note "${lbl} (${f}) exists but its permissions can't be read here."
+  elif [[ "${perm: -2}" == "00" ]]; then ok "${lbl} (${f}) is private (mode ${perm})."
+  else
+    no "${lbl} (${f}) is mode ${perm} — accessible to other users on the box."
+    fix "sudo chmod 600 ${f}"
+  fi
 }
 
 printf '%s' "$c_cyn"
@@ -123,6 +136,30 @@ root_pct="$(df -P / 2>/dev/null | awk 'NR==2{gsub(/%/,"",$5); print $5}')"; root
 if   (( root_pct >= 95 )); then no "OS disk (/) is ${root_pct}% full ($(human "$root_avail") free) — apps/Docker/logs can fail."; fix "free space on /, e.g. prune Docker images: sudo docker system prune -a"
 elif (( root_pct >= 90 )); then wn "OS disk (/) is ${root_pct}% full ($(human "$root_avail") free)."
 else ok "OS disk (/) has $(human "$root_avail") free (${root_pct}% used)."; fi
+
+# PC backups (Kopia) are meant to live on the INTERNAL disk — separate from the archive's failure
+# domain and off its space budget. If that disk fills, the family's PC backups stop silently.
+if [[ -d "$APPS_ROOT/kopia" ]] || have archive-pc-backup; then
+  if [[ -d "$PCBACKUP_DIR" ]]; then
+    pcb_src="$(findmnt -no SOURCE -T "$PCBACKUP_DIR" 2>/dev/null)"
+    pcb_avail="$(df -PB1 "$PCBACKUP_DIR" 2>/dev/null | awk 'NR==2{print $4}')"; pcb_avail="${pcb_avail:-0}"
+    pcb_pct="$(df -P "$PCBACKUP_DIR" 2>/dev/null | awk 'NR==2{gsub(/%/,"",$5); print $5}')"; pcb_pct="${pcb_pct:-0}"
+    if [[ -n "$arch_src" && "$pcb_src" == "$arch_src" ]]; then
+      no "PC backups (${PCBACKUP_DIR}) are on the SAME volume as the archive (${pcb_src}) — they share its failure domain and eat its space budget."
+      fix "set PCBACKUP_DIR to a path on the internal/OS disk in /etc/archive-ingest.conf, then re-run archive-kopia-setup.sh"
+    elif (( pcb_pct >= 95 )); then
+      no "PC-backup disk (${PCBACKUP_DIR}) is ${pcb_pct}% full ($(human "$pcb_avail") free) — new PC backups will fail."
+      fix "free space there, or move PCBACKUP_DIR to a larger disk and re-run archive-kopia-setup.sh"
+    elif (( pcb_pct >= 90 )); then
+      wn "PC-backup disk (${PCBACKUP_DIR}) is ${pcb_pct}% full ($(human "$pcb_avail") free)."
+    else
+      ok "PC backups (${PCBACKUP_DIR}) on ${pcb_src:-?}; $(human "$pcb_avail") free."
+    fi
+  else
+    wn "Kopia is set up but its PC-backup folder ${PCBACKUP_DIR} is missing."
+    fix "re-run archive-kopia-setup.sh"
+  fi
+fi
 
 # ---- 2b. boot safety (fstab nofail) ----------------------------------------------------------
 hdr "Boot safety (fstab)"
@@ -218,6 +255,17 @@ if [[ -e /etc/archive-ingest.conf ]]; then
     ok "Config /etc/archive-ingest.conf is not world-writable (${conf_perm})."
   fi
 fi
+# Secrets that must stay private to their owner: the restic passphrase and the apps' .env files —
+# two of which (the restic passphrase, the Kopia repo password) CANNOT be reset without orphaning
+# their backups. They are created 0600; flag loudly if anything loosened them.
+check_secret /etc/archive-restic.pass "Restic passphrase"
+shopt -s nullglob
+for _envf in "$APPS_ROOT"/*/.env; do
+  check_secret "$_envf" "App secret ($(basename "$(dirname "$_envf")"))"
+done
+shopt -u nullglob
+check_secret "$APPS_ROOT/paperless/docker-compose.env" "Paperless settings"
+check_secret "$APPS_ROOT/paperless/.paperless-secret" "Paperless secret"
 
 # ---- 5. search index -------------------------------------------------------------------------
 hdr "Search index"
@@ -362,6 +410,8 @@ declare -A from=(
   [archive-credentials]=archive-credentials-setup.sh
   [archive-restic]=archive-restic-setup.sh
   [archive-pc-backup]=archive-kopia-setup.sh
+  [archive-apps]=archive-apps-setup.sh
+  [archive-webui-run]=archive-webui-setup.sh
 )
 missing=0
 for cmd in safe-mount ingest-verify archive-verify archive archive-index archive-search archive-find archive-storage archive-backup; do
