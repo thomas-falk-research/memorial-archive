@@ -11,7 +11,10 @@
 #   * ingest-verify produces the data/ BagIt layout + a matching SHA256SUMS, REFUSES an incomplete copy
 #     (the hard completeness gate), and REFUSES a destination that isn't a separate mounted volume;
 #   * archive-verify passes a clean copy and FAILS a single tampered byte (bit-rot detection);
-#   * the failing-drive workflow (ddrescue an image, then ingest the image) works end to end.
+#   * the failing-drive workflow (ddrescue an image, then ingest the image) works end to end;
+#   * the family can FIND the will: a selective ingest of just a Windows disk's Users/ (skipping the
+#     OS), then archive-index + archive-search find the estate paperwork — including a SCANNED will,
+#     by its OCR'd content (this last phase is skipped if the search tools / tesseract aren't present).
 #
 # Why: prove the whole chain works on the real filesystem types (NTFS / exFAT / HFS+ / FAT / ext4)
 # BEFORE any irreplaceable data is ingested — and re-prove it after updates. APFS and BitLocker can't
@@ -336,6 +339,94 @@ else
     fi
   else
     skip "Failing-drive workflow: could not stage the source image here."
+  fi
+fi
+
+# ---- find the will: selective Windows-data ingest + full-text/OCR search -----------------------
+# The whole point of the archive is that the family can later FIND things — above all the estate
+# paperwork, including a will that was SCANNED to paper rather than typed. This phase models a Windows
+# system disk, ingests ONLY the user documents (the documented selective recipe — never the OS), then
+# builds the search index and proves archive-search finds the will by its CONTENT (OCR included).
+# It is skipped cleanly if the search tools (archive-search-setup.sh) or tesseract aren't installed.
+hdr "Find the will: selective Windows-data ingest + full-text/OCR search"
+will_fixture="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ci/fixtures/will-scanned.pdf"
+will_token="OCRWILLMARKER"   # exists ONLY inside the scanned image (see ci/make-fixtures.sh)
+if ! { have archive-index && have archive-search && have archive-find && have recollindex; }; then
+  skip "Search tools not installed (run archive-search-setup.sh) — skipping the find-the-will checks."
+else
+  ocr_ok=true
+  have tesseract       || { ocr_ok=false; note "tesseract not installed — scanned-PDF OCR skipped (born-digital text still checked)."; }
+  [[ -s "$will_fixture" ]] || { ocr_ok=false; note "scanned-will fixture missing — run ci/make-fixtures.sh (born-digital text still checked)."; }
+
+  # A drive that looks like a Windows system disk: the family's documents under Users/, plus OS/system
+  # folders a careful ingest must SKIP. We point ingest-verify at just .../Users (selective copy).
+  winimg="$WORK/src-winpc.img"; winloop=""
+  if new_loop "$winimg" 128 && winloop="$LOOP" && sudo mkfs.ext4 -q -F "$winloop" >/dev/null 2>&1 \
+     && sudo mount "$winloop" "$WORK/stage" 2>/dev/null; then
+    track_mount "$WORK/stage"
+    sudo mkdir -p "$WORK/stage/Users/Dad/Documents" "$WORK/stage/Users/Dad/Pictures" \
+                  "$WORK/stage/Windows/System32" "$WORK/stage/Program Files/App" "$WORK/stage/\$Recycle.Bin"
+    printf 'Last will and testament. I appoint an executor; my children are the beneficiaries. Estate, trust, probate, power of attorney.\n' \
+      | sudo tee "$WORK/stage/Users/Dad/Documents/estate-notes.txt" >/dev/null
+    printf 'Life insurance policy 884213. 401k rollover. Warranty deed to the family home.\n' \
+      | sudo tee "$WORK/stage/Users/Dad/Documents/finances.txt" >/dev/null
+    head -c 4096 /dev/urandom | sudo tee "$WORK/stage/Users/Dad/Pictures/holiday.jpg" >/dev/null
+    [[ "$ocr_ok" == true ]] && sudo cp "$will_fixture" "$WORK/stage/Users/Dad/Documents/last-will-scan.pdf"
+    printf 'system\n'  | sudo tee "$WORK/stage/Windows/System32/kernel32.dll" >/dev/null
+    printf 'program\n' | sudo tee "$WORK/stage/Program Files/App/app.exe" >/dev/null
+    head -c 8192 /dev/urandom | sudo tee "$WORK/stage/pagefile.sys" >/dev/null
+    sudo chmod -R a+rX "$WORK/stage"; sudo sync
+    sudo umount "$WORK/stage" 2>/dev/null || sudo umount -l "$WORK/stage" 2>/dev/null
+
+    if safe-mount "$winloop" "winpc" </dev/null >/dev/null 2>&1; then
+      winmnt="$(findmnt -nro TARGET --source "$winloop" | head -1)"; [[ -n "$winmnt" ]] && track_mount "$winmnt"
+      if [[ -n "$winmnt" ]] && ingest-verify "$winmnt/Users" "dad-pc-cdrive" </dev/null >/dev/null 2>&1; then
+        pass "selective ingest of just .../Users succeeded (provenance label: dad-pc-cdrive)."
+        windir="$(find "$AROOT/incoming/dad-pc-cdrive" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -1)"
+        if [[ -n "$windir" ]] && find "$windir/data" -iname 'estate-notes.txt' 2>/dev/null | grep -q .; then
+          pass "the family's documents under Users/ landed in the archive."
+        else
+          failc "selective ingest did not copy the documents under Users/."
+        fi
+        if [[ -n "$windir" ]] && find "$windir/data" \( -iname 'pagefile.sys' -o -iname 'kernel32.dll' -o -iname 'app.exe' \) -print 2>/dev/null | grep -q .; then
+          failc "selective ingest pulled in Windows/Program Files/pagefile system files it must skip."
+        else
+          pass "OS files (Windows/Program Files/pagefile.sys) were correctly EXCLUDED — only Users/ was copied."
+        fi
+      else
+        failc "selective ingest of .../Users failed."
+      fi
+    else
+      failc "could not safe-mount the Windows-model drive."
+    fi
+  else
+    skip "Could not build the Windows-model drive here."
+  fi
+
+  # Index everything ingested this run, then prove the estate paperwork — and the SCANNED will — is
+  # findable by content (recoll OCR), and by name.
+  if archive-index </dev/null >/dev/null 2>&1; then
+    pass "archive-index built the full-text + filename indexes over the ingested copies."
+    if archive-search executor </dev/null 2>/dev/null | grep -q 'estate-notes.txt'; then
+      pass "archive-search found estate paperwork by content (query: executor)."
+    else
+      failc "archive-search did not find born-digital estate paperwork."
+    fi
+    if [[ "$ocr_ok" == true ]]; then
+      if archive-search "$will_token" </dev/null 2>/dev/null | grep -qi 'last-will-scan.pdf'; then
+        pass "archive-search found the SCANNED will by its OCR'd content (marker $will_token) — OCR works."
+      else
+        failc "archive-search did NOT find the scanned will by OCR (is OCR_ENABLE=true and tesseract installed?)."
+      fi
+    fi
+    if archive-find 'last-will*' </dev/null 2>/dev/null | grep -qi 'last-will' \
+       || archive-find 'estate-notes.txt' </dev/null 2>/dev/null | grep -q 'estate-notes.txt'; then
+      pass "archive-find located the will/estate documents by name."
+    else
+      failc "archive-find did not locate the will/estate documents by name."
+    fi
+  else
+    failc "archive-index failed — cannot prove search."
   fi
 fi
 

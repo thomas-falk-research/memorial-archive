@@ -456,7 +456,11 @@ just the happy path:
 - an **incomplete** copy is refused and left `.INCOMPLETE` (the hard completeness gate);
 - ingesting into a **non-mounted** archive is refused;
 - `archive-verify` **fails a single tampered byte** (bit-rot detection);
-- the failing-drive workflow (`ddrescue` an image, then ingest the image) works.
+- the failing-drive workflow (`ddrescue` an image, then ingest the image) works;
+- the family can **find the will**: it models a Windows system disk, does a **selective ingest of
+  just its `Users/`** (skipping `Windows`/`Program Files`/`pagefile.sys`), then runs `archive-index`
+  and proves `archive-search` finds the estate paperwork — **including a SCANNED will, by its OCR'd
+  content** (this phase is skipped cleanly if the search tools or `tesseract` aren't installed).
 
 It cleans up after itself (unmounts, detaches the loopbacks, removes the scratch dir). Like
 `archive-reset.sh`, it is intentionally **not** installed and **not** in the menu; run it from this
