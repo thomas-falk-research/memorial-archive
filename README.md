@@ -29,7 +29,8 @@ It's a guided menu for the whole system:
   data are preserved; app versions advance to the latest.
 - **Reinstall / repair** — re-run setup to fix a broken command/service, without changing versions.
 - **Uninstall** — removes the tools only; it **never** touches your archive (`/srv/archive`) or backups.
-- **Everyday tasks** — ingest a drive, rebuild the search index, run a verified backup, show storage.
+- **Everyday tasks** — ingest a drive, rebuild the search index, **search the archive** (find a
+  document, e.g. the will), run a verified backup, show storage.
 
 Run it as your normal user (the one with sudo) — *not* with `sudo`. Everything below still works on
 its own for advanced use; the menu just drives it for you.
@@ -143,6 +144,16 @@ themselves under `data/`, alongside a `SHA256SUMS` manifest and a `PROVENANCE.tx
 marked `.INCOMPLETE` until **every** source file has been copied and verified, so a partial copy is
 never mistaken for a good one. Before each copy `ingest-verify` checks there's enough room, and warns
 (without blocking) if the copy would take the archive near or over its `MAX_ARCHIVE_GIB` soft cap.
+
+**Copying off a Windows system disk?** You usually want the family's files, not the operating
+system. When the guided `archive` menu sees a Windows system disk (a `Users` folder next to
+`Windows`/`Program Files`), it offers to copy **just `Users\`** — skipping the OS, programs, and the
+huge `pagefile.sys`/`hiberfil.sys` — so the archive isn't filled with system files. (It points the
+copy at the `Users` subfolder, so the completeness check and checksums still cover every file under
+it.) If a drive holds important data **outside** `Users`, answer "no" to copy the whole drive, or
+ingest those folders as their own labelled sources. Plain **data** drives, USB sticks and external
+disks have no such pair, so they're copied whole. The expert form is just a path:
+`ingest-verify /mnt/ingest/<name>/Users <label>`.
 
 **Linux or Mac source disks** (ext4/btrfs/XFS, HFS+/APFS) often have files owned by other users or
 root that your normal account can't read — a plain copy would be (correctly) refused as incomplete.

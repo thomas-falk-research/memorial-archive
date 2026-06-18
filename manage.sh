@@ -247,30 +247,44 @@ do_uninstall() {
 }
 
 do_everyday() {
-  local ch
+  local ch q
   while true; do
     title "Everyday tasks"
     say "  1) Ingest a drive / source   (guided menu)"
     say "  2) Rebuild the search index"
-    say "  3) Run a verified backup"
-    say "  4) Show storage status"
-    say "  5) Manage apps              (status · update · logs)"
-    say "  6) Passwords & logins       (where each lives + how to reset)"
+    say "  3) Search the archive        (find a document — e.g. the will)"
+    say "  4) Run a verified backup"
+    say "  5) Show storage status"
+    say "  6) Manage apps              (status · update · logs)"
+    say "  7) Passwords & logins       (where each lives + how to reset)"
     say "  b) Back to the main menu"
     if ! read -rp "Choose: " ch; then return; fi
     case "$ch" in
       1) if have_cmd archive;        then archive;        else err "Not installed — run Install (ingest) first."; fi ;;
       2) if have_cmd archive-index;  then archive-index;  else err "Not installed — run Install (search) first."; fi ;;
-      3) if have_cmd archive-backup; then archive-backup; else err "Not installed — run Install (storage) first."; fi
+      3) if have_cmd archive-search; then
+           say "Type a few words to find INSIDE the documents (their contents, not just file names)."
+           say 'Examples:  will        insurance        "power of attorney"   (quotes = exact phrase)'
+           read -rp "Search for: " q || true
+           if [[ -n "${q// /}" ]]; then
+             say ""
+             # Pass the whole line as ONE argument: recoll parses it (several words = all must match;
+             # a "quoted" run = exact phrase), so what the operator types maps straight to the query.
+             archive-search "$q" || warn "Search reported a problem — have you run 'Rebuild the search index' (2) yet?"
+           else
+             say "Nothing typed — cancelled."
+           fi
+         else err "Not installed — run Install (search) first."; fi ;;
+      4) if have_cmd archive-backup; then archive-backup; else err "Not installed — run Install (storage) first."; fi
          if have_cmd archive-restic; then say ""; say "Encrypted off-site snapshot (Restic)..."; archive-restic backup || warn "Restic backup reported a problem (see above)."; fi ;;
-      4) if have_cmd archive-storage;then archive-storage;else err "Not installed — run Install (storage) first."; fi ;;
-      5) if have_cmd archive-apps; then
+      5) if have_cmd archive-storage;then archive-storage;else err "Not installed — run Install (storage) first."; fi ;;
+      6) if have_cmd archive-apps; then
            archive-apps status
            confirm "Update all apps now (pull newer images + recreate)?" && archive-apps update
          else err "Not installed — run Install (app manager) first."; fi ;;
-      6) if have_cmd archive-credentials; then archive-credentials; else err "Not installed — run Install (step 6) first."; fi ;;
+      7) if have_cmd archive-credentials; then archive-credentials; else err "Not installed — run Install (step 6) first."; fi ;;
       b|B|q|Q) return ;;
-      *) warn "Please pick 1-6 or b." ;;
+      *) warn "Please pick 1-7 or b." ;;
     esac
     pause
   done
