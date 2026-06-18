@@ -33,7 +33,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends shellcheck python3-yaml rsync
 
       - name: Run static checks + rsync backup drill
-        # ci/run.sh also calls the restic drill, which self-skips here (restic is the job below).
+        # ci/run.sh also calls the restic and search drills, which self-skip here (they have their
+        # own jobs below, with the heavier tools installed).
         run: bash ci/run.sh
 
   restic:
@@ -51,3 +52,20 @@ jobs:
 
       - name: Backup/restore drill
         run: bash ci/restic-roundtrip.sh
+
+  search:
+    name: search + OCR drill (find the scanned will)
+    # Proves the acceptance test — the family can FIND a SCANNED will — by driving the real
+    # archive-index / archive-search / archive-find commands over a seeded scratch archive and the
+    # committed image-only PDF fixture, asserting recoll's OCR makes it searchable by content.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install recoll + tesseract + poppler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends recollcmd plocate tesseract-ocr tesseract-ocr-eng poppler-utils
+
+      - name: Search/OCR drill
+        run: bash ci/search-roundtrip.sh
