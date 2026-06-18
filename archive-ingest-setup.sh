@@ -352,6 +352,13 @@ case "$fstype" in
     err "md-RAID member. Assemble read-only:  sudo mdadm --assemble --readonly --scan"; exit 2 ;;
   crypto_LUKS)
     err "LUKS volume. Open read-only:  sudo cryptsetup open --readonly $dev unlocked"; exit 2 ;;
+  BitLocker)
+    err "BitLocker-encrypted volume. Unlock it READ-ONLY with dislocker, then ingest the unlocked"
+    err "image (dislocker needs the recovery key or user password):"
+    err "  sudo dislocker -r -V $dev -p<recovery-key> -- /mnt/bitlocker   # or -u<user-password>"
+    err "  sudo mount -o ro,loop /mnt/bitlocker/dislocker-file ${INGEST_MNT}/bl"
+    err "  ingest-verify ${INGEST_MNT}/bl <label>"
+    exit 2 ;;
 esac
 
 if ! sudo blockdev --setro "$base"; then
@@ -454,8 +461,12 @@ fi
 note "Scanning source (can take a moment on large drives)..."
 # Count files NUL-safely: a newline in a filename must not inflate the count, because this number is
 # the completeness GATE below (not just a display value).
-src_files="$(find "$src" -type f -printf 'x' 2>/dev/null | wc -c)"
-src_bytes="$(du -sb "$src" 2>/dev/null | cut -f1)"; src_bytes="${src_bytes:-0}"
+# Tolerate unreadable sub-items while sizing (e.g. a Linux source's root-owned lost+found): under
+# 'set -e' a non-zero find/du would otherwise abort the whole ingest with NO message. The copy step
+# (rsync) below stays the authority that REFUSES a genuinely partial/unreadable source, with a clear
+# error — so a real problem is still caught, just never silently.
+src_files="$(find "$src" -type f -printf 'x' 2>/dev/null | wc -c)" || true
+src_bytes="$(du -sb "$src" 2>/dev/null | cut -f1)" || true; src_bytes="${src_bytes:-0}"
 if [[ "${src_files:-0}" -eq 0 ]]; then
   err "Source has 0 files: $src"
   err "Is the drive actually mounted there?  Check:  ls -la '$src'"
@@ -605,9 +616,12 @@ else
   base="${ARCHIVE_ROOT}/incoming"
   [[ -d "$base" ]] || { err "No archive found at $base"; exit 1; }
   found=0
+  # Our manifests live at exactly incoming/<label>/<timestamp>/SHA256SUMS (depth 3) — a sibling of the
+  # data/ payload. Pin the depth so a SOURCE file named SHA256SUMS (now under data/) is never mistaken
+  # for a manifest and "verified" against itself.
   while IFS= read -r m; do
     found=1; verify_one "$(dirname "$m")" || rc=1
-  done < <(find "$base" -mindepth 2 -name SHA256SUMS 2>/dev/null | sort)
+  done < <(find "$base" -mindepth 3 -maxdepth 3 -name SHA256SUMS 2>/dev/null | sort)
   [[ $found -eq 1 ]] || warn "No completed ingests found under $base"
 fi
 if [[ $rc -eq 0 ]]; then ok "All checked copies match their manifests."

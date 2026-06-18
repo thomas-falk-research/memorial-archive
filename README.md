@@ -253,6 +253,37 @@ Per-user overrides may go in `${XDG_CONFIG_HOME:-~/.config}/archive-ingest.conf`
 
 ---
 
+## Before real data: prove the pipeline — `archive-selftest.sh`
+
+Want proof the whole ingestion chain works on the real drive formats *before* you trust it with
+irreplaceable data (and again after any update)? Run the end-to-end self-test:
+
+```
+./archive-selftest.sh
+```
+
+It builds small **scratch** loopback "drives" in a temp dir — it never touches `/srv/archive` or your
+backup — formats each with a different filesystem (ext4, NTFS, exFAT, FAT32, and HFS+ when `hfsprogs`
+is installed), seeds them with deliberately awkward files (spaces/Unicode/newlines in names, a file
+literally called `SHA256SUMS`, an empty file, nested folders), and runs each through the **real**
+`safe-mount` → `ingest-verify` → `archive-verify` pipeline — asserting the *safety* properties, not
+just the happy path:
+
+- the write-block actually **rejects a write**, and the mount is read-only;
+- the copy verifies, with the correct `data/` layout, manifest and provenance;
+- an **incomplete** copy is refused and left `.INCOMPLETE` (the hard completeness gate);
+- ingesting into a **non-mounted** archive is refused;
+- `archive-verify` **fails a single tampered byte** (bit-rot detection);
+- the failing-drive workflow (`ddrescue` an image, then ingest the image) works.
+
+It cleans up after itself (unmounts, detaches the loopbacks, removes the scratch dir). Like
+`archive-reset.sh`, it is intentionally **not** installed and **not** in the menu; run it from this
+folder as your normal user (it needs `sudo` for loopback devices). **APFS and BitLocker can't be
+created on Linux**, so they aren't covered automatically — test those with real media (an APFS drive
+from a Mac; a BitLocker volume — `safe-mount` now detects both and prints the unlock/ingest steps).
+
+---
+
 ## Starting fresh: erase test data before real data
 
 While setting the system up you'll likely ingest test files and drop sample documents/photos into
@@ -292,6 +323,12 @@ yet" / "no backup yet" are expected on an empty archive and clear after your fir
   latest version of its commands after a `git pull`. If an installed command (`archive-backup`,
   `archive-storage`, …) ever behaves differently from what these docs describe, an out-of-date copy is
   the likeliest cause — re-run its `*-setup.sh` first.
+- **Ingesting a native Linux disk (ext4/btrfs/XFS)?** Such a source has system files owned by root or
+  other users (even an empty disk has a root-only `lost+found`) that the unprivileged ingest user
+  can't read, so `ingest-verify` will (correctly, with a clear `rsync exit 23` message) refuse the
+  copy as incomplete rather than silently skip files. Most media here is Windows/Mac
+  (NTFS/exFAT/HFS+/APFS), which is unaffected; ingesting a Linux *system* disk needs a privileged copy
+  step that isn't wired up yet.
 - **Tailscale on a fresh box won't finish login from a remote SSH session.** Do `sudo tailscale up`
   at the machine's own keyboard/console (complete the browser login while the command is still
   running), or pass a pre-generated `--authkey`. Once it's up you can SSH in over the tailnet.
