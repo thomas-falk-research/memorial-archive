@@ -64,7 +64,8 @@ Everything is config-driven, so it adapts to other disks, paths, networks, and d
 | 9 | `archive-paperless-setup.sh` | *(optional, Docker)* **Document manager** (Paperless-ngx): OCRs, tags, and searches documents you drop into its `consume/` folder. Serves on `:8000`. | regular user w/ sudo |
 | 10 | `archive-copyparty-setup.sh` | *(optional, Docker)* **Read-only web file browser** (copyparty): browse and download *any* file in the archive from a phone/computer browser — no app, no SMB setup. Archive bind-mounted **read-only**; listens on loopback only (publish it via the front door). | regular user w/ sudo |
 | 11 | `archive-czkawka-setup.sh` | *(optional, Docker)* **Find duplicates** (czkawka, GUI in the browser): spot duplicate and visually-similar files across the archive even when they're named/timestamped differently. Archive mounted **read-only** (it finds, it can never delete); an admin tool, behind the front-door password at `dupes.<domain>`. | regular user w/ sudo |
-| 12 | `archive-proxy-setup.sh` | *(optional)* One **front door**: Caddy on `:80` serves a **portal page** and routes friendly names — `photos.<domain>` → Immich, `docs.<domain>` → Paperless, `search.<domain>` → recoll, `files.<domain>` → copyparty — so the family uses memorable URLs with **no ports**. Pair with AdGuard/router DNS rewrites. | regular user w/ sudo |
+| 12 | `archive-stirling-setup.sh` | *(optional, Docker)* **PDF tools** (Stirling-PDF): a self-hosted web app to merge, split, OCR, convert, compress and sign PDFs — on the box, nothing uploaded to the internet. No archive access (you upload files in the browser). Front-door tile at `pdf.<domain>`. | regular user w/ sudo |
+| 13 | `archive-proxy-setup.sh` | *(optional)* One **front door**: Caddy on `:80` serves a **portal page** and routes friendly names — `photos.<domain>` → Immich, `docs.<domain>` → Paperless, `search.<domain>` → recoll, `files.<domain>` → copyparty, `pdf.<domain>` → Stirling-PDF — so the family uses memorable URLs with **no ports**. Pair with AdGuard/router DNS rewrites. | regular user w/ sudo |
 
 > Run the setup scripts as your **normal user** (the one with sudo) — *not* with `sudo ./script`.
 > They call `sudo` themselves where needed and must know your real home directory.
@@ -74,7 +75,7 @@ Everything is config-driven, so it adapts to other disks, paths, networks, and d
 > those already-installed commands — so after you update the repo, **re-run the matching `*-setup.sh`**
 > to pick up the fix. Re-running is safe; every script is idempotent.
 >
-> Scripts 8–11 are the optional apps (Docker Compose stacks; czkawka is an admin tool). Their data lives on the OS
+> Scripts 8–12 are the optional apps (Docker Compose stacks; czkawka is an admin tool). Their data lives on the OS
 > disk under `/srv/apps` (off the 2 TB archive budget); Immich and copyparty reference the archive
 > read-only, so the masters are never modified. Each is pinned to a specific upstream release and
 > re-runnable. Once you have more than one, `archive-apps-setup.sh` (script 6) gives you a single
