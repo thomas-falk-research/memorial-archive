@@ -184,6 +184,22 @@ if [[ -e "$RESTIC_PASS_FILE" ]]; then
 TXT
 fi
 
+# --- Windows-PC backup server (Kopia) ---------------------------------------------------------
+if [[ -d "$APPS_ROOT/kopia" ]]; then
+  h "Windows-PC backup server (Kopia)  —  the family's PCs back up to the box"
+  cat <<TXT
+  Each PC has its OWN login (username = its name). Manage them on the box:
+      archive-pc-backup add <pc-name>      create a PC's login (prints its password + the
+                                           server URL and certificate fingerprint for KopiaUI)
+      archive-pc-backup list               see which PCs are set up
+      archive-pc-backup remove <pc-name>   revoke a PC
+      archive-pc-backup info               show the URL + fingerprint again
+  To RESET a PC's password: 'remove' then 'add' it again (KopiaUI re-enters the new one).
+  Repository password: ${APPS_ROOT}/kopia/.env (mode 600). Like the restic passphrase it CANNOT be
+  reset — losing it makes the PC backups in /srv/pc-backups unreadable. Record it off the box.
+TXT
+fi
+
 # --- good habits ------------------------------------------------------------------------------
 h "Good habits"
 cat <<'TXT'
