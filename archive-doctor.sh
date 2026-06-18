@@ -347,6 +347,7 @@ declare -A from=(
   [archive-index]=archive-search-setup.sh [archive-search]=archive-search-setup.sh
   [archive-find]=archive-search-setup.sh
   [archive-storage]=archive-storage-setup.sh [archive-backup]=archive-storage-setup.sh
+  [archive-credentials]=archive-credentials-setup.sh
 )
 missing=0
 for cmd in safe-mount ingest-verify archive-verify archive archive-index archive-search archive-find archive-storage archive-backup; do
