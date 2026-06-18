@@ -94,7 +94,10 @@ fi
 hdr "4. corruption is caught (restic check fails on a damaged repo)"
 pack="$(find "$B/restic/data" -type f 2>/dev/null | head -1)"
 if [[ -n "$pack" ]]; then
-  : > "$pack"   # truncate a pack file to simulate on-disk corruption
+  # Delete a referenced pack to simulate loss/on-disk damage. (restic writes packs read-only, so
+  # truncating one fails as a normal user; rm needs only directory write, so it works as any user —
+  # and a missing pack is exactly what a plain `restic check` is built to catch.)
+  rm -f "$pack"
   if wr check >/dev/null 2>&1; then
     bad "restic check PASSED on a corrupted repo — corruption would go unnoticed"; fails=1
   else
