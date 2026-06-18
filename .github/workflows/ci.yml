@@ -20,19 +20,20 @@ concurrency:
 
 jobs:
   static:
-    name: shellcheck · bash -n · compose
+    name: shellcheck · compose · rsync backup drill
     # Pinned (not ubuntu-latest): this image's apt shellcheck is 0.9.0, the version the clean
     # baseline was validated against, so CI findings match what a developer sees locally.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install tools (shellcheck, PyYAML)
+      - name: Install tools (shellcheck, PyYAML, rsync)
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends shellcheck python3-yaml
+          sudo apt-get install -y --no-install-recommends shellcheck python3-yaml rsync
 
-      - name: Run static checks
+      - name: Run static checks + rsync backup drill
+        # ci/run.sh also calls the restic drill, which self-skips here (restic is the job below).
         run: bash ci/run.sh
 
   restic:

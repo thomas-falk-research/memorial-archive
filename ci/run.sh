@@ -12,8 +12,9 @@ fail=0
 "$here/check-syntax.sh"   || fail=1
 "$here/shellcheck-all.sh" || fail=1
 python3 "$here/validate-compose.py" || fail=1
-# Dynamic backup/restore drill — self-skips cleanly when restic isn't installed (e.g. the static CI
-# job), so this stays a one-command local "run everything".
+# Dynamic backup/restore drills — each self-skips cleanly when its tool (rsync / restic) is absent,
+# so this stays a one-command local "run everything".
+"$here/backup-roundtrip.sh" || fail=1
 "$here/restic-roundtrip.sh" || fail=1
 
 hdr "Summary"

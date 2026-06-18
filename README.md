@@ -476,8 +476,8 @@ Actions on every push and pull request (the badge at the top is their status):
 ./ci/run.sh        # run all of it locally before you push (needs: shellcheck, python3-yaml; restic optional)
 ```
 
-It performs three static checks plus a backup/restore drill, and fails loudly (non-zero exit) on
-any problem:
+It performs three static checks plus two backup/restore drills, and fails loudly (non-zero exit)
+on any problem:
 
 - **`bash -n` + `py_compile`** — every shell script parses and the Python helper compiles.
 - **`shellcheck -S style`** — at the strictest level, on the outer setup scripts **and** on each
@@ -492,7 +492,13 @@ any problem:
   Caddy-fronted apps bind to loopback only, and a service joining the shared `memorial` network
   finds it declared external. A compose file that regressed to mounting the masters read-write
   would fail the build.
-- **backup/restore drill** (`ci/restic-roundtrip.sh`) — *"a backup you can't restore is worthless."*
+- **rsync backup drill** (`ci/backup-roundtrip.sh`) — drives the **real `archive-backup` wrapper**
+  against a scratch archive and asserts the plain mirror's guarantees: it re-verifies every
+  `SHA256SUMS` at the destination and writes its marker, the mirror is **byte-identical** (a tool-free
+  restore) with the rebuildable index excluded, it is **additive** (a file removed from the source is
+  kept in the backup), and a **silently corrupted backup copy fails verification**. Needs only
+  rsync + sha256sum.
+- **restic backup/restore drill** (`ci/restic-roundtrip.sh`) — *"a backup you can't restore is worthless."*
   It drives the **real `archive-restic` wrapper** (extracted from its setup script) against a scratch
   archive and repo and asserts the recovery guarantees: a verified backup, a **byte-identical
   restore** with the rebuildable index excluded, **point-in-time recovery** (an older snapshot still
