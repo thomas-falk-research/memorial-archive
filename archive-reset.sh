@@ -10,7 +10,8 @@
 # >>> THIS PERMANENTLY DELETES, WITH NO UNDO: <<<
 #   - every ingested copy in the archive (ARCHIVE_ROOT/incoming) and the search indexes
 #   - every backed-up copy and app dump on the off-site backup (BACKUP_ROOT)
-#   - ALL Immich photos/albums/people and ALL Paperless documents (their databases are reset empty)
+#   - ALL Immich photos/albums/people, ALL Paperless documents, and ALL Docmost notes/accounts
+#     (their databases are reset empty)
 #
 # It KEEPS all tooling and configuration: installed commands, /etc config + credentials, Samba/Caddy/
 # Tailscale setup, fstab mounts, Docker, and each app's compose/.env (so logins & settings survive).
@@ -35,6 +36,7 @@ APPS_ROOT="${APPS_ROOT:-/srv/apps}"
 IMMICH_DIR="${IMMICH_DIR:-$APPS_ROOT/immich}"
 PAPERLESS_DIR="${PAPERLESS_DIR:-$APPS_ROOT/paperless}"
 COPYPARTY_DIR="${COPYPARTY_DIR:-$APPS_ROOT/copyparty}"
+DOCMOST_DIR="${DOCMOST_DIR:-$APPS_ROOT/docmost}"
 
 # ---- output helpers --------------------------------------------------------------------------
 if [[ -t 1 ]]; then
@@ -102,6 +104,9 @@ print_delete_inventory() {
   if [[ -f "$COPYPARTY_DIR/docker-compose.yml" ]]; then
     printf '   • copyparty: its thumbnail/index cache (regenerable; config kept)\n'
   fi
+  if [[ -f "$DOCMOST_DIR/docker-compose.yml" ]]; then
+    printf '   • Docmost:  ALL notes/pages, accounts and uploaded attachments (its database & volumes reset empty)\n'
+  fi
 }
 
 # ---- the two confirmations -------------------------------------------------------------------
@@ -153,6 +158,15 @@ reset_copyparty() {
   wipe_contents "$COPYPARTY_DIR/cfg/hist" || true
   ( cd "$COPYPARTY_DIR" && sudo docker compose up -d ) >/dev/null 2>&1 || warn "copyparty 'compose up' reported an issue; check it after."
   ok "copyparty cache cleared (it regenerates thumbnails on demand)."
+}
+
+reset_docmost() {
+  [[ -f "$DOCMOST_DIR/docker-compose.yml" ]] || { say "   Docmost not installed — skipping."; return 0; }
+  say "   Docmost: stopping containers and removing its data volumes (pages, accounts, uploads)..."
+  dc "$DOCMOST_DIR" down -v >/dev/null 2>&1 || warn "Docmost 'compose down -v' reported an issue; continuing."
+  say "   Docmost: starting fresh (re-create the admin account after)..."
+  dc "$DOCMOST_DIR" up -d >/dev/null 2>&1 || warn "Docmost 'compose up' reported an issue; check it after."
+  ok "Docmost reset to empty (open it and re-create the admin account)."
 }
 
 reset_archive() {
@@ -217,7 +231,8 @@ main() {
   say "  Tailscale setup, fstab mounts, Docker, and each app's compose/.env (logins & settings survive)."
   hr
   say "  Afterwards the apps are EMPTY: you re-create the Immich admin, re-add the read-only library"
-  say "  /mnt/archive, and re-add family users. Paperless recreates its admin automatically."
+  say "  /mnt/archive, and re-add family users. Paperless recreates its admin automatically; for"
+  say "  Docmost, open it and create the admin account again (the first account becomes the owner)."
 
   confirm_dual || exit 1
 
@@ -227,6 +242,7 @@ main() {
     reset_immich
     reset_paperless
     reset_copyparty
+    reset_docmost
     reset_archive
     reset_backup
   } 2>&1 | tee "$log"

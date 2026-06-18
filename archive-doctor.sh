@@ -236,7 +236,7 @@ hdr "Family apps"
 if ! have ss; then
   note "Can't check service ports ('ss' not found)."
 else
-  for entry in "Immich:2283:immich" "Paperless:8000:paperless" "Files (copyparty):3923:copyparty" "Duplicates (czkawka):5800:czkawka" "PDF tools (Stirling):8082:stirling"; do
+  for entry in "Immich:2283:immich" "Paperless:8000:paperless" "Files (copyparty):3923:copyparty" "Duplicates (czkawka):5800:czkawka" "PDF tools (Stirling):8082:stirling" "Notes (Docmost):3000:docmost"; do
     nm="${entry%%:*}"; rest="${entry#*:}"; port="${rest%%:*}"; dir="${rest#*:}"
     listening "$port"; lp=$?
     if   [[ $lp -eq 0 ]]; then ok "${nm} is responding on :${port}."
@@ -278,6 +278,7 @@ if [[ $on80 -eq 0 ]] && have curl; then
   [[ -d "$APPS_ROOT/copyparty" ]] && fn_names+=(files)
   [[ -d "$APPS_ROOT/czkawka" ]] && fn_names+=(dupes)
   [[ -d "$APPS_ROOT/stirling" ]] && fn_names+=(pdf)
+  [[ -d "$APPS_ROOT/docmost" ]] && fn_names+=(docmost)
   for n in "${fn_names[@]}"; do
     name="${n}.${BASE_DOMAIN}"; code="$(http_code "$name")"
     case "$code" in
@@ -317,7 +318,7 @@ fi
 # ---- 9b. family app data backup (their DB/tags/uploads live outside the archive) -------------
 hdr "App data backup"
 app_inst=false
-for _d in immich paperless; do [[ -d "$APPS_ROOT/$_d" ]] && app_inst=true; done
+for _d in immich paperless docmost; do [[ -d "$APPS_ROOT/$_d" ]] && app_inst=true; done
 if [[ "$app_inst" != true ]]; then
   note "No family apps installed (optional) — nothing extra to back up."
 elif [[ -d "$BACKUP_ROOT" ]] && is_sep_mount "$BACKUP_ROOT"; then
@@ -325,13 +326,13 @@ elif [[ -d "$BACKUP_ROOT" ]] && is_sep_mount "$BACKUP_ROOT"; then
   if [[ -f "$amarker" ]]; then
     amts="$(stat -c %Y "$amarker" 2>/dev/null || echo 0)"; aage=$(( ( $(date +%s) - amts ) / 86400 ))
     if (( aage > BACKUP_STALE_DAYS )); then
-      wn "App data (Immich DB+uploads / Paperless export) last backed up ${aage} day(s) ago (older than ${BACKUP_STALE_DAYS})."
+      wn "App data (Immich/Paperless/Docmost — their DBs, tags, uploads) last backed up ${aage} day(s) ago (older than ${BACKUP_STALE_DAYS})."
       fix "run a verified backup — it includes the apps: archive-backup"
     else
-      ok "App data backed up ${aage} day(s) ago (Immich DB + uploads / Paperless export)."
+      ok "App data backed up ${aage} day(s) ago (Immich/Paperless/Docmost — DBs, tags, uploads)."
     fi
   else
-    wn "Immich/Paperless are installed but their OWN data has never been backed up."
+    wn "Family apps (Immich/Paperless/Docmost) are installed but their OWN data has never been backed up."
     fix "run a verified backup — it now includes them: archive-backup"
   fi
 else
