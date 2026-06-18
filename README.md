@@ -92,10 +92,15 @@ health check from this folder:
 
 It inspects storage and mounts, the archive and its `.INCOMPLETE`/checksum integrity, the
 on-site/off-site backup (and how fresh it is), the search index, the family apps (Immich/Paperless)
-and the Caddy front door, the friendly `.home` names, and the installed commands — and prints a
-plain-English ✓ / ! / ✗ for each, with a concrete **fix** for anything that isn't right. It changes
-nothing, so it is always safe to run. (Its exit code is non-zero if any check failed, so a scheduled
-job can use it too.)
+and the Caddy front door, the friendly `.home` names, and the installed commands (flagging any that
+are out of date versus the repo — the *stale-install trap*) — and prints a plain-English ✓ / ! / ✗
+for each, with a concrete **fix** for anything that isn't right. It changes nothing, so it is always
+safe to run. (Its exit code is non-zero if any check failed, so a scheduled job can use it too.)
+
+**You don't have to run it every time.** Once storage is set up, a one-line health summary — archive
+free space, how close you are to the soft cap, and how fresh the last verified backup is — is shown
+automatically at each SSH login (a fast, read-only `/etc/update-motd.d` banner; it uses `df` only, so
+it never slows a login). It's a heads-up; the full picture is always `./archive-doctor.sh`.
 
 ---
 
@@ -119,7 +124,8 @@ archive-verify                   # re-check every copy against its checksums (de
 Each verified copy lands in `/srv/archive/incoming/<label>/<timestamp>/`: the source files
 themselves under `data/`, alongside a `SHA256SUMS` manifest and a `PROVENANCE.txt`. A copy stays
 marked `.INCOMPLETE` until **every** source file has been copied and verified, so a partial copy is
-never mistaken for a good one.
+never mistaken for a good one. Before each copy `ingest-verify` checks there's enough room, and warns
+(without blocking) if the copy would take the archive near or over its `MAX_ARCHIVE_GIB` soft cap.
 
 **Read-only is enforced three ways:** desktop auto-mount is disabled, a udev rule stops USB media
 from auto-mounting, and `safe-mount` engages a verified block-layer write-block before mounting.
@@ -227,7 +233,7 @@ All commands read `/etc/archive-ingest.conf` (edit and re-run — no reinstall):
 | `MIN_FREE_GIB` | `10` | Keep at least this many GiB free after a copy. |
 | `BACKUP_ROOT` | `/srv/backup` | Where backups are written. |
 | `REQUIRE_SEPARATE_BACKUP` | `true` | Refuse to back up onto the same filesystem as the archive. |
-| `MAX_ARCHIVE_GIB` | `1800` | Soft cap; `archive-storage` warns as you approach it. |
+| `MAX_ARCHIVE_GIB` | `1800` | Soft cap; you're warned as you approach it — at ingest, at each SSH login, and in `archive-storage`/`archive-doctor`. |
 
 Per-user overrides may go in `${XDG_CONFIG_HOME:-~/.config}/archive-ingest.conf`.
 
