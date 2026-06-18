@@ -473,10 +473,11 @@ Every script here runs as root on a box that holds irreplaceable data, so a chan
 Actions on every push and pull request (the badge at the top is their status):
 
 ```
-./ci/run.sh        # run all of it locally before you push (needs: shellcheck, python3-yaml)
+./ci/run.sh        # run all of it locally before you push (needs: shellcheck, python3-yaml; restic optional)
 ```
 
-It performs three static checks and fails loudly (non-zero exit) on any problem:
+It performs three static checks plus a backup/restore drill, and fails loudly (non-zero exit) on
+any problem:
 
 - **`bash -n` + `py_compile`** — every shell script parses and the Python helper compiles.
 - **`shellcheck -S style`** — at the strictest level, on the outer setup scripts **and** on each
@@ -491,8 +492,15 @@ It performs three static checks and fails loudly (non-zero exit) on any problem:
   Caddy-fronted apps bind to loopback only, and a service joining the shared `memorial` network
   finds it declared external. A compose file that regressed to mounting the masters read-write
   would fail the build.
+- **backup/restore drill** (`ci/restic-roundtrip.sh`) — *"a backup you can't restore is worthless."*
+  It drives the **real `archive-restic` wrapper** (extracted from its setup script) against a scratch
+  archive and repo and asserts the recovery guarantees: a verified backup, a **byte-identical
+  restore** with the rebuildable index excluded, **point-in-time recovery** (an older snapshot still
+  holds the original after a later edit), and that a **corrupted repository is caught** by `restic
+  check`. It needs the `restic` binary (its own CI job installs it; `./ci/run.sh` self-skips it if
+  restic isn't installed locally).
 
-The CI job is pinned to `ubuntu-24.04` so its `shellcheck` (0.9.0) matches the baseline these
+The CI jobs are pinned to `ubuntu-24.04` so the `shellcheck` (0.9.0) matches the baseline these
 scripts are kept clean against. If you add a script or an embedded command, no wiring is needed —
 the checks discover every `*.sh`/`ci/*.sh` and every `/usr/local/bin/<cmd>` heredoc automatically.
 

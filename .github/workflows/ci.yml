@@ -34,3 +34,19 @@ jobs:
 
       - name: Run static checks
         run: bash ci/run.sh
+
+  restic:
+    name: backup/restore drill (restic)
+    # Proves the encrypted backup actually restores — runs the real archive-restic wrapper against a
+    # scratch repo (backup, restore, point-in-time, corruption detection). No Docker needed.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install restic
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends restic
+
+      - name: Backup/restore drill
+        run: bash ci/restic-roundtrip.sh
