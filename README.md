@@ -55,7 +55,7 @@ Everything is config-driven, so it adapts to other disks, paths, networks, and d
 | 0 | `make-ubuntu-usb.sh` | On *another* Linux box (e.g. a Raspberry Pi): build a verified, bootable Ubuntu installer USB. | `sudo` (it re-execs itself) |
 | 1 | `provision.sh` | Base tooling: Docker + Compose, Ansible, Tailscale, Git + GitHub CLI, Rust, Go, Chromium, hardened SSH, correct UTF-8 locale, firewall + auto-updates. | regular user w/ sudo |
 | 2 | `archive-ingest-setup.sh` | The ingestion core: read any disk/share **read-only** behind a write-block and make verified, checksummed master copies. Installs `safe-mount`, `ingest-verify`, `archive-verify`, and the guided `archive` menu. | regular user w/ sudo |
-| 3 | `archive-search-setup.sh` | Make the archive keyword-searchable (a local, GUI-free "Everything" + full-text): `recoll`, `plocate`, Outlook-PST extraction. Installs `archive-index`, `archive-search`, `archive-find`. | regular user w/ sudo |
+| 3 | `archive-search-setup.sh` | Make the archive keyword-searchable (a local, GUI-free "Everything" + full-text): `recoll` (indexes inside PDF — incl. **scanned**, via OCR — Office, email, archives), `plocate`, Outlook-PST extraction. Installs `archive-index`, `archive-search`, `archive-find`. | regular user w/ sudo |
 | 4 | `archive-serve-setup.sh` | Share the archive **read-only** on the local network so the family can browse it from the iPhone/iPad Files app (SMB). | regular user w/ sudo |
 | 5 | `archive-storage-setup.sh` | Mount the external archive disk and the backup target safely (via `fstab`, `nofail`), and run **verified backups**. Installs `archive-storage`, `archive-backup`. | regular user w/ sudo |
 | 6 | `archive-webui-setup.sh` | Let the family **keyword-search** the archive from a phone browser — the recoll web UI behind a password-protected Caddy proxy on the local network. | regular user w/ sudo |
@@ -150,13 +150,21 @@ Old/failing drives should be imaged first with `ddrescue` (see the notes printed
 After an ingest, refresh the indexes, then search:
 
 ```
-archive-index                    # extract any PST/OST, then (re)build the full-text + filename indexes
-archive-search "life insurance"  # search INSIDE files (PDF, Office, RTF, text, email, ...) with snippets
+archive-index                    # (re)build the full-text + filename indexes (extracts PST/OST, OCRs scans)
+archive-search "life insurance"  # search INSIDE files with snippets
 archive-find  "*.pst"            # instant search by file NAME (substring or glob)
 ```
 
-The indexes live **on the archive volume** (`/srv/archive/.recoll`, `/srv/archive/.plocate.db`),
-so they grow with the archive, never the OS disk.
+`archive-search` looks **inside every common format** — PDF (including **scanned** PDFs, via OCR),
+Word/Excel/PowerPoint (modern and legacy) and OpenDocument, RTF/HTML/plain text, email
+(PST/OST/mbox/EML/Outlook `.msg`), and inside archives (zip/7z/tar/rar). Anything with no extractable
+text (an obscure binary, a photo) is still found by **name** with `archive-find`. So *every* file is
+findable, and the contents of normal documents — and of scanned paperwork — are full-text searchable.
+
+OCR of scanned PDFs is on by default (tesseract). It makes the **first** index slower (each scan is
+read once, then cached). Tune it in `/etc/archive-ingest.conf`: `OCR_ENABLE=false` to skip it, or
+`OCR_LANG=eng+deu` for extra languages. The indexes live **on the archive volume**
+(`/srv/archive/.recoll`, `/srv/archive/.plocate.db`), so they grow with the archive, never the OS disk.
 
 ---
 
@@ -246,6 +254,8 @@ All commands read `/etc/archive-ingest.conf` (edit and re-run — no reinstall):
 | `BACKUP_ROOT` | `/srv/backup` | Where backups are written. |
 | `REQUIRE_SEPARATE_BACKUP` | `true` | Refuse to back up onto the same filesystem as the archive. |
 | `MAX_ARCHIVE_GIB` | `1800` | Soft cap; you're warned as you approach it — at ingest, at each SSH login, and in `archive-storage`/`archive-doctor`. |
+| `OCR_ENABLE` | `true` | OCR scanned PDFs during `archive-index` so their text is searchable (needs `tesseract`). Set `false` to skip. |
+| `OCR_LANG` | `eng` | tesseract OCR language(s), e.g. `eng+deu`. Install the matching `tesseract-ocr-<lang>` package. |
 
 Per-user overrides may go in `${XDG_CONFIG_HOME:-~/.config}/archive-ingest.conf`.
 

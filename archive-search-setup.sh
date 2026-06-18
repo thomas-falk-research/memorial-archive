@@ -2,11 +2,14 @@
 #
 # archive-search-setup.sh — Phase 2 of the digital-archive server: make everything searchable.
 #
-# Installs a local, GUI-free equivalent of Windows "Everything" plus full-text search:
-#   * recoll   — full-text content index (PDF, Office, RTF, text, email, archives, ...).
-#   * plocate  — instant filename index ("search by what it's called").
+# Installs a local, GUI-free equivalent of Windows "Everything" plus full-text search of EVERY file:
+#   * recoll   — full-text content index for all common formats: PDF (incl. SCANNED, via OCR), Word/
+#                Excel/PowerPoint (modern + legacy) and OpenDocument, RTF/HTML/text, email
+#                (PST/OST/mbox/EML/MSG), and inside archives (zip/7z/tar/rar). Anything it can't read
+#                as text is still found by NAME.
+#   * plocate  — instant filename index ("search by what it's called") for every file.
 #   * readpst  — convert Outlook PST/OST mailboxes so their messages become searchable.
-#   * format helpers (poppler-utils, antiword, catdoc, unrtf, p7zip) for recoll's filters.
+#   * tesseract OCR + format helpers (poppler, antiword, catdoc, unrtf, p7zip, unar, ...) for recoll.
 #
 # and three commands:
 #   archive-index    (re)build both indexes over the archive; extracts PST/OST first. Re-run
@@ -23,8 +26,9 @@ trap 'printf "\n\033[1;31mERROR\033[0m: command failed at line %s\n" "$LINENO" >
 
 # ---- Packages --------------------------------------------------------------------------------
 # recollcmd = recoll's CLI indexer/query without the Qt GUI (right choice for a server).
-CORE_PKGS=( recollcmd plocate pst-utils poppler-utils antiword catdoc unrtf p7zip-full )
-BEST_EFFORT_PKGS=( djvulibre-bin )   # DjVu text extraction; skipped if unavailable
+CORE_PKGS=( recollcmd plocate pst-utils poppler-utils antiword catdoc unrtf p7zip-full tesseract-ocr tesseract-ocr-eng )
+# DjVu, RAR/extra archives, WordPerfect, Outlook .msg — each skipped individually if unavailable.
+BEST_EFFORT_PKGS=( djvulibre-bin unar libwpd-tools libemail-outlook-message-perl )
 SKIPPED=()
 
 ASSUME_YES=false
@@ -97,8 +101,10 @@ info "writing archive-index"
 sudo tee /usr/local/bin/archive-index >/dev/null <<'SCRIPT'
 #!/usr/bin/env bash
 # archive-index — (re)build the searchable indexes over the archive: full-text content
-# (recoll) and filenames (plocate). Outlook PST/OST mailboxes are extracted first so their
-# messages become searchable. Incremental and safe to re-run after every ingest.
+# (recoll) and filenames (plocate). recoll indexes INSIDE every common format (PDF incl. scanned
+# via OCR, Office/OpenDocument, RTF/HTML/text, email PST/OST/mbox/EML/MSG, and archives); anything
+# it can't read as text is still found by name. Outlook PST/OST are extracted first. Incremental and
+# safe to re-run after every ingest.
 set -uo pipefail
 for _cfg in /etc/archive-ingest.conf "${XDG_CONFIG_HOME:-$HOME/.config}/archive-ingest.conf"; do
   # shellcheck source=/dev/null
@@ -137,8 +143,25 @@ if command -v readpst >/dev/null 2>&1; then
   done < <(find "$ARCHIVE_ROOT/incoming" -type f \( -iname '*.pst' -o -iname '*.ost' \) -print0 2>/dev/null)
 fi
 
-# 2) Full-text index (recoll). Config + index live on the archive volume, not the OS disk.
+# 2) Full-text index (recoll). Config + index live on the archive volume, not the OS disk. recoll has
+# built-in handlers for every common format (Office/OpenDocument, PDF, RTF/HTML/text, email, archives),
+# so NO per-format pre-extraction is needed beyond the PST/OST step above — it reads inside them at
+# index time. Anything with no extractable text is still indexed by NAME (indexallfilenames).
 mkdir -p "$RECOLL_CONFDIR"
+# OCR (tesseract) makes SCANNED PDFs searchable by content. 'pdfocr = 1' is what triggers it (recoll
+# OCRs a PDF only when it has no extractable text layer); 'ocrprogs'/'tesseractlang' pick the engine
+# and language. On when tesseract is installed; disable with OCR_ENABLE=false, or set OCR_LANG=eng+deu
+# etc. in /etc/archive-ingest.conf. The first index is slower (each scan is OCR'd; results are cached).
+# (Standalone photos aren't OCR'd — OCRing every snapshot is slow and useless — they're found by name.)
+ocr_conf=""
+if [[ "${OCR_ENABLE:-true}" == "true" ]] && command -v tesseract >/dev/null 2>&1; then
+  ocr_conf="ocrprogs = tesseract
+tesseractlang = ${OCR_LANG:-eng}
+pdfocr = 1"
+  note "OCR on (tesseract, lang=${OCR_LANG:-eng}): scanned PDFs become searchable by content (slower first index)."
+else
+  note "OCR off (tesseract missing or OCR_ENABLE=false): scanned-only PDFs are found by NAME, not content."
+fi
 # Always (re)write the managed config, so a changed ARCHIVE_ROOT or skip list actually takes effect
 # on re-run (previously it was only written when absent, so stale paths could silently persist).
 cat > "$RECOLL_CONFDIR/recoll.conf" <<EOF
@@ -148,6 +171,8 @@ cat > "$RECOLL_CONFDIR/recoll.conf" <<EOF
 topdirs = ${ARCHIVE_ROOT}
 skippedPaths = ${RECOLL_CONFDIR} ${PLOCATE_DB} ${ARCHIVE_ROOT}/images
 followLinks = 0
+indexallfilenames = 1
+${ocr_conf}
 EOF
 note "Building/updating the full-text index (incremental; can take a while on first run)..."
 recollindex -c "$RECOLL_CONFDIR" >/dev/null 2>&1 || { err "recollindex failed."; exit 1; }
@@ -166,6 +191,7 @@ if [[ -f "$PLOCATE_DB" ]]; then chmod 0644 "$PLOCATE_DB" 2>/dev/null || true; fi
 ok "Indexes updated."
 printf '    full-text index : %s  (%s)\n' "$RECOLL_CONFDIR" "$(du -sh "$RECOLL_CONFDIR" 2>/dev/null | cut -f1)"
 printf '    filename index  : %s\n' "$PLOCATE_DB"
+printf '    coverage        : text inside PDF/Office/email/archives%s; every file findable by name\n' "$([[ -n "$ocr_conf" ]] && echo " + OCR of scanned PDFs")"
 printf '    search contents : archive-search "keywords"\n'
 printf '    search names    : archive-find "name"\n'
 SCRIPT
