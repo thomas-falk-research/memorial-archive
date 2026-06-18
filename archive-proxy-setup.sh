@@ -30,18 +30,25 @@ PAPERLESS_UPSTREAM="${PAPERLESS_UPSTREAM:-127.0.0.1:8000}"
 SEARCH_UPSTREAM="${SEARCH_UPSTREAM:-127.0.0.1:8088}"
 COPYPARTY_UPSTREAM="${COPYPARTY_UPSTREAM:-127.0.0.1:3923}"
 COPYPARTY_DIR="${COPYPARTY_DIR:-/srv/apps/copyparty}"
+CZKAWKA_UPSTREAM="${CZKAWKA_UPSTREAM:-127.0.0.1:5800}"
+CZKAWKA_DIR="${CZKAWKA_DIR:-/srv/apps/czkawka}"
 SEARCH_USER="${SEARCH_USER:-family}"
 
 PHOTOS_HOST="photos.${BASE_DOMAIN}"
 DOCS_HOST="docs.${BASE_DOMAIN}"
 SEARCH_HOST="search.${BASE_DOMAIN}"
 FILES_HOST="files.${BASE_DOMAIN}"
+DUPES_HOST="dupes.${BASE_DOMAIN}"
 PORTAL_HOST="archive.${BASE_DOMAIN}"
 
 # The Files browser (copyparty) is only routed/shown if it's installed — it serves anonymous-read on
 # loopback, so (like search) Caddy must put it behind the family password.
 copyparty_installed=false
 [[ -d "$COPYPARTY_DIR" ]] && copyparty_installed=true
+# czkawka (duplicate finder) is an admin tool: routed behind the same password if installed, but NOT
+# shown as a family portal tile. It serves a no-auth GUI on loopback, so Caddy must gate it too.
+czkawka_installed=false
+[[ -d "$CZKAWKA_DIR" ]] && czkawka_installed=true
 
 ASSUME_YES=false
 usage() {
@@ -80,6 +87,7 @@ printf '    %-18s -> Immich        (%s)\n' "${PHOTOS_HOST}" "$IMMICH_UPSTREAM"
 printf '    %-18s -> Paperless-ngx (%s)\n' "${DOCS_HOST}" "$PAPERLESS_UPSTREAM"
 printf '    %-18s -> recoll search (%s, keeps its login)\n' "${SEARCH_HOST}" "$SEARCH_UPSTREAM"
 [[ "$copyparty_installed" == true ]] && printf '    %-18s -> files browser (%s, same login)\n' "${FILES_HOST}" "$COPYPARTY_UPSTREAM"
+[[ "$czkawka_installed" == true ]] && printf '    %-18s -> duplicate finder (%s, same login; admin tool, no portal tile)\n' "${DUPES_HOST}" "$CZKAWKA_UPSTREAM"
 printf '    portal also answers on the IP (%s) and any unmatched name\n' "${lan_ip:-this host}"
 if [[ "${ASSUME_YES}" != "true" ]]; then
   read -rp $'\nProceed? [y/N] ' _ans
@@ -122,6 +130,10 @@ if [[ "$copyparty_installed" == true ]]; then
 HTMLCARD
 )"
   files_dns="$(printf '        %-16s -> %s' "${FILES_HOST}" "${lan_ip:-<mini-PC IP>}")"
+fi
+dupes_dns=""
+if [[ "$czkawka_installed" == true ]]; then
+  dupes_dns="$(printf '        %-16s -> %s' "${DUPES_HOST}" "${lan_ip:-<mini-PC IP>}")"
 fi
 
 # ---- Portal page -----------------------------------------------------------------------------
@@ -216,6 +228,21 @@ CADDY2
   info "Added the Files browser route: ${FILES_HOST} -> ${COPYPARTY_UPSTREAM} (password-protected)."
 fi
 
+# Append the duplicate-finder (czkawka) route only when installed — an admin tool, behind the same
+# password. Caddy proxies its noVNC WebSocket transparently.
+if [[ "$czkawka_installed" == true ]]; then
+  sudo tee -a "$CADDYFILE" >/dev/null <<CADDY3
+
+http://${DUPES_HOST} {
+	${auth_dir} {
+		${SEARCH_USER} ${search_hash}
+	}
+	reverse_proxy ${CZKAWKA_UPSTREAM}
+}
+CADDY3
+  info "Added the duplicate-finder route: ${DUPES_HOST} -> ${CZKAWKA_UPSTREAM} (password-protected)."
+fi
+
 log "Validating and reloading Caddy"
 if sudo caddy validate --adapter caddyfile --config "$CADDYFILE" >/dev/null 2>&1; then
   sudo systemctl enable --now caddy >/dev/null 2>&1 || true
@@ -239,6 +266,7 @@ cat <<EOF
         ${DOCS_HOST}     -> ${lan_ip:-<mini-PC IP>}
         ${SEARCH_HOST}   -> ${lan_ip:-<mini-PC IP>}
 ${files_dns}
+${dupes_dns}
 
     Then, from any device using AdGuard for DNS:
         http://${PORTAL_HOST}/     <- the one address to remember (portal with buttons)
