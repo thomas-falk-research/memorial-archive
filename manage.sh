@@ -82,6 +82,16 @@ do_install() {
   if confirm "15) Notes & memories (Docmost, family-writable)?";   then run archive-docmost-setup.sh; fi
   if confirm "16) One-URL front door (portal + friendly names)?";  then run archive-proxy-setup.sh; fi
   if confirm "17) Back up the family's Windows PCs onto the box (Kopia server)?"; then run archive-kopia-setup.sh; fi
+  # One consolidated reminder of the secrets that CANNOT be reset, so they're not lost in the install
+  # output. We point to them rather than reprint the values on every run (the setup step prints a
+  # freshly-generated one once); these commands reveal them to record off the box.
+  if [[ -e /etc/archive-restic.pass || -e /srv/apps/kopia/.env ]]; then
+    say ""
+    title "Record these OFF the box — they CANNOT be reset"
+    [[ -e /etc/archive-restic.pass ]] && say "  restic backup passphrase:  sudo cat /etc/archive-restic.pass"
+    [[ -e /srv/apps/kopia/.env ]]     && say "  Kopia repository password: sudo grep KOPIA_REPO_PASSWORD /srv/apps/kopia/.env"
+    say "  (losing either makes those encrypted backups unrecoverable; full guide: archive-credentials)"
+  fi
   ok "Install run complete. Tip: choose 'Check health' to verify it all."
 }
 

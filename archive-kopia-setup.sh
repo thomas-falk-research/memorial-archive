@@ -92,12 +92,12 @@ sudo mkdir -p "$APP_DIR/config" "$APP_DIR/cache" "$APP_DIR/logs" "$PCBACKUP_DIR/
 log "Writing .env (reuse existing secrets on re-run; NEVER rotate the repo password)"
 # The repo password encrypts EVERYTHING; rotating it would orphan all PC backups, so a re-run reuses
 # it. The server-control password is the admin channel used to reload users.
-repo_pw=""; ctrl_pw=""
+repo_pw=""; ctrl_pw=""; fresh_repo=false
 if sudo test -f "$APP_DIR/.env"; then
   repo_pw="$(sudo sed -n 's/^KOPIA_REPO_PASSWORD=//p' "$APP_DIR/.env" 2>/dev/null | head -1)"
   ctrl_pw="$(sudo sed -n 's/^KOPIA_SERVER_CONTROL_PASSWORD=//p' "$APP_DIR/.env" 2>/dev/null | head -1)"
 fi
-[[ -n "$repo_pw" ]] || repo_pw="$(openssl rand -base64 24 2>/dev/null | tr -d '\n')"
+[[ -n "$repo_pw" ]] || { repo_pw="$(openssl rand -base64 24 2>/dev/null | tr -d '\n')"; fresh_repo=true; }
 [[ -n "$ctrl_pw" ]] || ctrl_pw="$(openssl rand -base64 18 2>/dev/null | tr -d '\n')"
 sudo tee "$APP_DIR/.env" >/dev/null <<EOF
 # Managed by archive-kopia-setup.sh — secrets; keep private (chmod 600).
@@ -263,3 +263,14 @@ cat <<EOF
         CANNOT be reset without orphaning the backups — record it off the box.
       - Managed with the other apps:  archive-apps status   ·   archive-pc-backup status
 EOF
+
+# Printed LAST (and only when freshly generated) so this un-resettable secret can't get buried above
+# the notes or under a later script's output. On a re-run the password is reused, never reprinted.
+if [[ "$fresh_repo" == true ]]; then
+  printf '\n\033[1;33m================================ RECORD THIS NOW ================================\033[0m\n'
+  printf '  Kopia repository password (also saved, mode 600, at %s):\n\n' "$APP_DIR/.env"
+  printf '      \033[1m%s\033[0m\n\n' "$repo_pw"
+  printf '  Keep a copy OFF the box (password manager / sealed envelope). Like the restic passphrase\n'
+  printf '  it CANNOT be reset: without it the Windows-PC backups in %s are unrecoverable.\n' "$PCBACKUP_DIR"
+  printf '\033[1;33m================================================================================\033[0m\n'
+fi
