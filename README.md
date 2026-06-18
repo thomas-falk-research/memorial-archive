@@ -59,15 +59,16 @@ Everything is config-driven, so it adapts to other disks, paths, networks, and d
 | 4 | `archive-serve-setup.sh` | Share the archive **read-only** on the local network so the family can browse it from the iPhone/iPad Files app (SMB). | regular user w/ sudo |
 | 5 | `archive-storage-setup.sh` | Mount the external archive disk and the backup target safely (via `fstab`, `nofail`), and run **verified backups**. Installs `archive-storage`, `archive-backup`. | regular user w/ sudo |
 | 6 | `archive-credentials-setup.sh` | A **single, plain-English reference** to every login on the box (`archive-credentials`): where each password/secret lives and the exact steps to **reset** it. It never shows the actual passwords — read-only, no sudo to run. | regular user w/ sudo |
-| 7 | `archive-apps-setup.sh` | *(optional, Docker)* **Manage every app from one command** (`archive-apps`): status · update/pull · logs · restart, across Immich/Paperless/copyparty/etc. Each app keeps its **own** Compose project (data volumes are never renamed); also creates a shared `memorial` network. | regular user w/ sudo |
-| 8 | `archive-webui-setup.sh` | Let the family **keyword-search** the archive from a phone browser — the recoll web UI behind a password-protected Caddy proxy on the local network. | regular user w/ sudo |
-| 9 | `archive-immich-setup.sh` | *(optional, Docker)* Self-hosted **photos & videos** (Immich) with native iPhone/iPad apps; indexes the archive's photos **read-only, in place** (no copy). Serves on `:2283`. | regular user w/ sudo |
-| 10 | `archive-paperless-setup.sh` | *(optional, Docker)* **Document manager** (Paperless-ngx): OCRs, tags, and searches documents you drop into its `consume/` folder. Serves on `:8000`. | regular user w/ sudo |
-| 11 | `archive-copyparty-setup.sh` | *(optional, Docker)* **Read-only web file browser** (copyparty): browse and download *any* file in the archive from a phone/computer browser — no app, no SMB setup. Archive bind-mounted **read-only**; listens on loopback only (publish it via the front door). | regular user w/ sudo |
-| 12 | `archive-czkawka-setup.sh` | *(optional, Docker)* **Find duplicates** (czkawka, GUI in the browser): spot duplicate and visually-similar files across the archive even when they're named/timestamped differently. Archive mounted **read-only** (it finds, it can never delete); an admin tool, behind the front-door password at `dupes.<domain>`. | regular user w/ sudo |
-| 13 | `archive-stirling-setup.sh` | *(optional, Docker)* **PDF tools** (Stirling-PDF): a self-hosted web app to merge, split, OCR, convert, compress and sign PDFs — on the box, nothing uploaded to the internet. No archive access (you upload files in the browser). Front-door tile at `pdf.<domain>`. | regular user w/ sudo |
-| 14 | `archive-docmost-setup.sh` | *(optional, Docker)* **Notes & memories** (Docmost): a private family wiki the family can **write** in — a biography, memories, and notes to organise the deceased's affairs. The **only read-WRITE app**, so its database is the family's own irreplaceable content and is **backed up** (DB + uploads) by `archive-backup`. Has its **own** logins (no front-door password). Serves on `:3000`. | regular user w/ sudo |
-| 15 | `archive-proxy-setup.sh` | *(optional)* One **front door**: Caddy on `:80` serves a **portal page** and routes friendly names — `photos.<domain>` → Immich, `docs.<domain>` → Paperless, `search.<domain>` → recoll, `files.<domain>` → copyparty, `pdf.<domain>` → Stirling-PDF, `docmost.<domain>` → Docmost — so the family uses memorable URLs with **no ports**. Pair with AdGuard/router DNS rewrites. | regular user w/ sudo |
+| 7 | `archive-restic-setup.sh` | *(optional)* **Encrypted, deduplicated off-site snapshots** (`archive-restic`) of the archive, **alongside** the rsync mirror: dated restore points in little space, integrity-checked after every run. Repo lives on the same off-site target; a passphrase is created once. | regular user w/ sudo |
+| 8 | `archive-apps-setup.sh` | *(optional, Docker)* **Manage every app from one command** (`archive-apps`): status · update/pull · logs · restart, across Immich/Paperless/copyparty/etc. Each app keeps its **own** Compose project (data volumes are never renamed); also creates a shared `memorial` network. | regular user w/ sudo |
+| 9 | `archive-webui-setup.sh` | Let the family **keyword-search** the archive from a phone browser — the recoll web UI behind a password-protected Caddy proxy on the local network. | regular user w/ sudo |
+| 10 | `archive-immich-setup.sh` | *(optional, Docker)* Self-hosted **photos & videos** (Immich) with native iPhone/iPad apps; indexes the archive's photos **read-only, in place** (no copy). Serves on `:2283`. | regular user w/ sudo |
+| 11 | `archive-paperless-setup.sh` | *(optional, Docker)* **Document manager** (Paperless-ngx): OCRs, tags, and searches documents you drop into its `consume/` folder. Serves on `:8000`. | regular user w/ sudo |
+| 12 | `archive-copyparty-setup.sh` | *(optional, Docker)* **Read-only web file browser** (copyparty): browse and download *any* file in the archive from a phone/computer browser — no app, no SMB setup. Archive bind-mounted **read-only**; listens on loopback only (publish it via the front door). | regular user w/ sudo |
+| 13 | `archive-czkawka-setup.sh` | *(optional, Docker)* **Find duplicates** (czkawka, GUI in the browser): spot duplicate and visually-similar files across the archive even when they're named/timestamped differently. Archive mounted **read-only** (it finds, it can never delete); an admin tool, behind the front-door password at `dupes.<domain>`. | regular user w/ sudo |
+| 14 | `archive-stirling-setup.sh` | *(optional, Docker)* **PDF tools** (Stirling-PDF): a self-hosted web app to merge, split, OCR, convert, compress and sign PDFs — on the box, nothing uploaded to the internet. No archive access (you upload files in the browser). Front-door tile at `pdf.<domain>`. | regular user w/ sudo |
+| 15 | `archive-docmost-setup.sh` | *(optional, Docker)* **Notes & memories** (Docmost): a private family wiki the family can **write** in — a biography, memories, and notes to organise the deceased's affairs. The **only read-WRITE app**, so its database is the family's own irreplaceable content and is **backed up** (DB + uploads) by `archive-backup`. Has its **own** logins (no front-door password). Serves on `:3000`. | regular user w/ sudo |
+| 16 | `archive-proxy-setup.sh` | *(optional)* One **front door**: Caddy on `:80` serves a **portal page** and routes friendly names — `photos.<domain>` → Immich, `docs.<domain>` → Paperless, `search.<domain>` → recoll, `files.<domain>` → copyparty, `pdf.<domain>` → Stirling-PDF, `docmost.<domain>` → Docmost — so the family uses memorable URLs with **no ports**. Pair with AdGuard/router DNS rewrites. | regular user w/ sudo |
 
 > Run the setup scripts as your **normal user** (the one with sudo) — *not* with `sudo ./script`.
 > They call `sudo` themselves where needed and must know your real home directory.
@@ -77,10 +78,10 @@ Everything is config-driven, so it adapts to other disks, paths, networks, and d
 > those already-installed commands — so after you update the repo, **re-run the matching `*-setup.sh`**
 > to pick up the fix. Re-running is safe; every script is idempotent.
 >
-> Scripts 9–14 are the optional apps (Docker Compose stacks; czkawka is an admin tool, Docmost is read-write). Their data lives on the OS
+> Scripts 10–15 are the optional apps (Docker Compose stacks; czkawka is an admin tool, Docmost is read-write). Their data lives on the OS
 > disk under `/srv/apps` (off the 2 TB archive budget); Immich and copyparty reference the archive
 > read-only, so the masters are never modified. Each is pinned to a specific upstream release and
-> re-runnable. Once you have more than one, `archive-apps-setup.sh` (script 7) gives you a single
+> re-runnable. Once you have more than one, `archive-apps-setup.sh` (script 8) gives you a single
 > command — `archive-apps` — to see, update, log, and restart them all (each keeps its own Compose
 > project, so data is never moved).
 
@@ -322,6 +323,28 @@ archive-backup                   # verified, additive backup to /srv/backup; re-
 
 `archive-backup` never deletes from the backup, refuses to "back up" onto the same disk as the
 archive, and is only declared good once every destination checksum verifies.
+
+### Encrypted, deduplicated snapshots: `archive-restic`
+
+The rsync mirror is a plain, browsable, tool-free copy — perfect for "give me that file back". On top
+of it, `archive-restic-setup.sh` adds **restic** for what rsync can't do: **encrypted** storage (safe
+on an off-site/borrowed disk or a share) and **deduplicated history** — many dated restore points in
+little space, so you can recover a file as it was *last week*, not just as it is now (a real guard
+against accidental edits, deletions, or ransomware on a connected machine).
+
+```
+archive-restic backup            # snapshot the archive, prune old points, then verify (restic check)
+archive-restic snapshots         # list the dated restore points
+archive-restic restore latest --target /tmp/restore    # restore a point ('latest' = newest)
+archive-restic check             # re-verify repository integrity any time
+```
+
+Both run from `manage.sh → Everyday → Run a verified backup` (rsync first, then the restic snapshot).
+The repo lives alongside the mirror on `/srv/backup` (override `RESTIC_REPO`), retention is tunable
+(`RESTIC_KEEP_*`), and it runs **as you** — no sudo, so it works from `cron` too. Its passphrase is
+created once at `/etc/archive-restic.pass`; **record it off the box** — it is the one secret that
+**cannot be reset** (losing it makes the encrypted backup unrecoverable). `archive-credentials` points
+you to it, and `archive-doctor` reports when the encrypted snapshot was last verified.
 
 ### App data (Immich, Paperless, Docmost) is backed up too
 

@@ -43,6 +43,7 @@ inst_ingest()    { have_cmd ingest-verify; }
 inst_search()    { have_cmd archive-index; }
 inst_storage()   { have_cmd archive-storage; }
 inst_creds()     { have_cmd archive-credentials; }
+inst_restic()    { have_cmd archive-restic; }
 inst_serve()     { grep -qs 'Digital Archive' /etc/samba/smb.conf; }
 inst_webui()     { [[ -f /etc/systemd/system/archive-webui.service ]]; }
 inst_immich()    { [[ -d /srv/apps/immich ]]; }
@@ -67,17 +68,18 @@ do_install() {
   if confirm "4) Read-only SMB share for iPhones/iPads?";                             then run archive-serve-setup.sh; fi
   if confirm "5) Storage layout + verified backups?";                                 then run archive-storage-setup.sh; fi
   if confirm "6) Password & reset reference (archive-credentials)?";                   then run archive-credentials-setup.sh; fi
+  if confirm "7) Encrypted off-site snapshots (Restic, alongside rsync)?";             then run archive-restic-setup.sh; fi
   say ""
   say "Optional family-facing apps (Docker):"
-  if confirm "7) App manager + shared network (manage all apps from one command)?"; then run archive-apps-setup.sh; fi
-  if confirm "8) Phone search web UI?";                            then run archive-webui-setup.sh; fi
-  if confirm "9) Photos & videos (Immich)?";                       then run archive-immich-setup.sh; fi
-  if confirm "10) Documents (Paperless-ngx)?";                     then run archive-paperless-setup.sh; fi
-  if confirm "11) Files web browser (copyparty)?";                 then run archive-copyparty-setup.sh; fi
-  if confirm "12) Duplicate finder (czkawka, read-only)?";         then run archive-czkawka-setup.sh; fi
-  if confirm "13) PDF tools (Stirling-PDF)?";                      then run archive-stirling-setup.sh; fi
-  if confirm "14) Notes & memories (Docmost, family-writable)?";   then run archive-docmost-setup.sh; fi
-  if confirm "15) One-URL front door (portal + friendly names)?";  then run archive-proxy-setup.sh; fi
+  if confirm "8) App manager + shared network (manage all apps from one command)?"; then run archive-apps-setup.sh; fi
+  if confirm "9) Phone search web UI?";                            then run archive-webui-setup.sh; fi
+  if confirm "10) Photos & videos (Immich)?";                      then run archive-immich-setup.sh; fi
+  if confirm "11) Documents (Paperless-ngx)?";                     then run archive-paperless-setup.sh; fi
+  if confirm "12) Files web browser (copyparty)?";                 then run archive-copyparty-setup.sh; fi
+  if confirm "13) Duplicate finder (czkawka, read-only)?";         then run archive-czkawka-setup.sh; fi
+  if confirm "14) PDF tools (Stirling-PDF)?";                      then run archive-stirling-setup.sh; fi
+  if confirm "15) Notes & memories (Docmost, family-writable)?";   then run archive-docmost-setup.sh; fi
+  if confirm "16) One-URL front door (portal + friendly names)?";  then run archive-proxy-setup.sh; fi
   ok "Install run complete. Tip: choose 'Check health' to verify it all."
 }
 
@@ -90,6 +92,7 @@ refresh_installed() {
   inst_serve   && run archive-serve-setup.sh   --yes
   inst_storage && run archive-storage-setup.sh --yes
   inst_creds   && run archive-credentials-setup.sh --yes
+  inst_restic  && run archive-restic-setup.sh  --yes
   inst_apps    && run archive-apps-setup.sh    --yes
   inst_webui   && run archive-webui-setup.sh   --yes
   if inst_immich; then
@@ -177,7 +180,7 @@ do_uninstall() {
 
   if confirm "Remove the installed commands (archive, archive-backup, archive-storage, …)?"; then
     local c
-    for c in safe-mount ingest-verify archive-verify archive archive-index archive-search archive-find archive-storage archive-backup archive-credentials archive-apps archive-webui-run; do
+    for c in safe-mount ingest-verify archive-verify archive archive-index archive-search archive-find archive-storage archive-backup archive-restic archive-credentials archive-apps archive-webui-run; do
       sudo rm -f "/usr/local/bin/$c"
     done
     sudo rm -f /etc/update-motd.d/50-memorial-archive   # the login health banner (installed with storage)
@@ -243,7 +246,8 @@ do_everyday() {
     case "$ch" in
       1) if have_cmd archive;        then archive;        else err "Not installed — run Install (ingest) first."; fi ;;
       2) if have_cmd archive-index;  then archive-index;  else err "Not installed — run Install (search) first."; fi ;;
-      3) if have_cmd archive-backup; then archive-backup; else err "Not installed — run Install (storage) first."; fi ;;
+      3) if have_cmd archive-backup; then archive-backup; else err "Not installed — run Install (storage) first."; fi
+         if have_cmd archive-restic; then say ""; say "Encrypted off-site snapshot (Restic)..."; archive-restic backup || warn "Restic backup reported a problem (see above)."; fi ;;
       4) if have_cmd archive-storage;then archive-storage;else err "Not installed — run Install (storage) first."; fi ;;
       5) if have_cmd archive-apps; then
            archive-apps status
