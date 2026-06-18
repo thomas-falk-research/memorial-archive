@@ -58,11 +58,12 @@ Everything is config-driven, so it adapts to other disks, paths, networks, and d
 | 3 | `archive-search-setup.sh` | Make the archive keyword-searchable (a local, GUI-free "Everything" + full-text): `recoll` (indexes inside PDF — incl. **scanned**, via OCR — Office, email, archives), `plocate`, Outlook-PST extraction. Installs `archive-index`, `archive-search`, `archive-find`. | regular user w/ sudo |
 | 4 | `archive-serve-setup.sh` | Share the archive **read-only** on the local network so the family can browse it from the iPhone/iPad Files app (SMB). | regular user w/ sudo |
 | 5 | `archive-storage-setup.sh` | Mount the external archive disk and the backup target safely (via `fstab`, `nofail`), and run **verified backups**. Installs `archive-storage`, `archive-backup`. | regular user w/ sudo |
-| 6 | `archive-webui-setup.sh` | Let the family **keyword-search** the archive from a phone browser — the recoll web UI behind a password-protected Caddy proxy on the local network. | regular user w/ sudo |
-| 7 | `archive-immich-setup.sh` | *(optional, Docker)* Self-hosted **photos & videos** (Immich) with native iPhone/iPad apps; indexes the archive's photos **read-only, in place** (no copy). Serves on `:2283`. | regular user w/ sudo |
-| 8 | `archive-paperless-setup.sh` | *(optional, Docker)* **Document manager** (Paperless-ngx): OCRs, tags, and searches documents you drop into its `consume/` folder. Serves on `:8000`. | regular user w/ sudo |
-| 9 | `archive-copyparty-setup.sh` | *(optional, Docker)* **Read-only web file browser** (copyparty): browse and download *any* file in the archive from a phone/computer browser — no app, no SMB setup. Archive bind-mounted **read-only**; listens on loopback only (publish it via the front door). | regular user w/ sudo |
-| 10 | `archive-proxy-setup.sh` | *(optional)* One **front door**: Caddy on `:80` serves a **portal page** and routes friendly names — `photos.<domain>` → Immich, `docs.<domain>` → Paperless, `search.<domain>` → recoll, `files.<domain>` → copyparty — so the family uses memorable URLs with **no ports**. Pair with AdGuard/router DNS rewrites. | regular user w/ sudo |
+| 6 | `archive-apps-setup.sh` | *(optional, Docker)* **Manage every app from one command** (`archive-apps`): status · update/pull · logs · restart, across Immich/Paperless/copyparty/etc. Each app keeps its **own** Compose project (data volumes are never renamed); also creates a shared `memorial` network. | regular user w/ sudo |
+| 7 | `archive-webui-setup.sh` | Let the family **keyword-search** the archive from a phone browser — the recoll web UI behind a password-protected Caddy proxy on the local network. | regular user w/ sudo |
+| 8 | `archive-immich-setup.sh` | *(optional, Docker)* Self-hosted **photos & videos** (Immich) with native iPhone/iPad apps; indexes the archive's photos **read-only, in place** (no copy). Serves on `:2283`. | regular user w/ sudo |
+| 9 | `archive-paperless-setup.sh` | *(optional, Docker)* **Document manager** (Paperless-ngx): OCRs, tags, and searches documents you drop into its `consume/` folder. Serves on `:8000`. | regular user w/ sudo |
+| 10 | `archive-copyparty-setup.sh` | *(optional, Docker)* **Read-only web file browser** (copyparty): browse and download *any* file in the archive from a phone/computer browser — no app, no SMB setup. Archive bind-mounted **read-only**; listens on loopback only (publish it via the front door). | regular user w/ sudo |
+| 11 | `archive-proxy-setup.sh` | *(optional)* One **front door**: Caddy on `:80` serves a **portal page** and routes friendly names — `photos.<domain>` → Immich, `docs.<domain>` → Paperless, `search.<domain>` → recoll, `files.<domain>` → copyparty — so the family uses memorable URLs with **no ports**. Pair with AdGuard/router DNS rewrites. | regular user w/ sudo |
 
 > Run the setup scripts as your **normal user** (the one with sudo) — *not* with `sudo ./script`.
 > They call `sudo` themselves where needed and must know your real home directory.
@@ -72,9 +73,12 @@ Everything is config-driven, so it adapts to other disks, paths, networks, and d
 > those already-installed commands — so after you update the repo, **re-run the matching `*-setup.sh`**
 > to pick up the fix. Re-running is safe; every script is idempotent.
 >
-> Scripts 7–9 are optional family-facing apps (Docker Compose stacks). Their data lives on the OS
+> Scripts 8–10 are the optional family-facing apps (Docker Compose stacks). Their data lives on the OS
 > disk under `/srv/apps` (off the 2 TB archive budget); Immich and copyparty reference the archive
-> read-only, so the masters are never modified. Each is pinned to a specific upstream release and re-runnable.
+> read-only, so the masters are never modified. Each is pinned to a specific upstream release and
+> re-runnable. Once you have more than one, `archive-apps-setup.sh` (script 6) gives you a single
+> command — `archive-apps` — to see, update, log, and restart them all (each keeps its own Compose
+> project, so data is never moved).
 
 After `provision.sh`, authenticate the tools once: `sudo tailscale up` (for *your* remote admin
 and the off-site backup), then `gh auth login`.
@@ -208,6 +212,28 @@ Sign in with the same `family` login as search. It is **strictly read-only**, fo
 archive is mounted into the container **read-only**, copyparty grants only read (no upload/delete),
 it listens on **loopback** only, and Caddy fronts it with the **password**. The family can view and
 copy; they can never change or delete a master.
+
+---
+
+## Managing the apps: `archive-apps`
+
+As the number of Docker apps grows (photos, documents, file browser, …), `archive-apps-setup.sh`
+installs one command so you don't have to `cd` into each app's folder:
+
+```
+archive-apps status            # what's running, across every app
+archive-apps update            # pull newer images + recreate — updates them all
+archive-apps logs <app>        # follow one app's logs (e.g. archive-apps logs immich)
+archive-apps restart           # restart everything
+archive-apps up | down         # start / stop everything
+```
+
+Crucially, **each app keeps its own Compose project** under `/srv/apps/<app>` — `archive-apps` just
+runs `docker compose` across all of them. It deliberately does **not** merge them into one project,
+because that would rename their data volumes (e.g. Paperless's documents and database) and orphan
+them. It also creates a shared `memorial` Docker network that newer apps join, so a future
+containerised front door can reach them by name. (`manage.sh → Everyday tasks → Manage apps` runs
+the same thing.)
 
 ---
 
