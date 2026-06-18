@@ -208,15 +208,6 @@ SCRIPT
 sudo chmod +x /usr/local/bin/archive-restic
 
 log "Done — encrypted off-site snapshots are ready."
-if [[ "$fresh_pass" == true ]]; then
-  printf '\n\033[1;33m================================ RECORD THIS NOW ================================\033[0m\n'
-  printf '  Your restic repository passphrase (also saved at %s):\n\n' "$PASS_FILE"
-  printf '      \033[1m%s\033[0m\n\n' "$(sudo cat "$PASS_FILE")"
-  printf '  Write it down and keep a copy OFF the box (password manager / sealed envelope).\n'
-  printf '  Unlike app logins, this CANNOT be reset: without it the encrypted backup is\n'
-  printf '  unrecoverable. (archive-credentials will remind you where it lives, but never shows it.)\n'
-  printf '\033[1;33m================================================================================\033[0m\n'
-fi
 cat <<EOF
 
     First/again, run a backup (also done by 'manage.sh -> Everyday -> Run a verified backup'):
@@ -231,3 +222,15 @@ cat <<EOF
       - It runs as you (${USER:-$(id -un)}); no sudo needed — so it also works from cron.
       - Retention/repo/passphrase are tunable in /etc/archive-ingest.conf (RESTIC_* / RESTIC_REPO).
 EOF
+
+# Printed LAST (and only when freshly generated) so this un-resettable passphrase can't get buried
+# above the notes or under a later script's output. On a re-run it is reused, never reprinted.
+if [[ "$fresh_pass" == true ]]; then
+  printf '\n\033[1;33m================================ RECORD THIS NOW ================================\033[0m\n'
+  printf '  Your restic repository passphrase (also saved, root-protected, at %s):\n\n' "$PASS_FILE"
+  printf '      \033[1m%s\033[0m\n\n' "$(sudo cat "$PASS_FILE")"
+  printf '  Write it down and keep a copy OFF the box (password manager / sealed envelope).\n'
+  printf '  Unlike app logins, this CANNOT be reset: without it the encrypted backup is\n'
+  printf '  unrecoverable. (archive-credentials will remind you where it lives, but never shows it.)\n'
+  printf '\033[1;33m================================================================================\033[0m\n'
+fi
