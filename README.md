@@ -90,12 +90,16 @@ health check from this folder:
 ./archive-doctor.sh
 ```
 
-It inspects storage and mounts, the archive and its `.INCOMPLETE`/checksum integrity, the
-on-site/off-site backup (and how fresh it is), the search index, the family apps (Immich/Paperless)
-and the Caddy front door, the friendly `.home` names, and the installed commands (flagging any that
-are out of date versus the repo — the *stale-install trap*) — and prints a plain-English ✓ / ! / ✗
-for each, with a concrete **fix** for anything that isn't right. It changes nothing, so it is always
-safe to run. (Its exit code is non-zero if any check failed, so a scheduled job can use it too.)
+It inspects storage and mounts — including the things that **break silently**: an archive that's
+**not writable** by the ingest user or has **remounted read-only** after disk errors, a backup that
+landed on the **same disk** as the archive, a full OS disk, missing `fstab` `nofail`, loose
+credential/permission bits, and (best-effort) disk **SMART** health. It also checks the archive's
+`.INCOMPLETE`/checksum integrity, the on-site/off-site backup (and how fresh it is), the search index,
+the family apps (Immich/Paperless) and the Caddy front door, the friendly `.home` names, and the
+installed commands (flagging any that are out of date versus the repo — the *stale-install trap*) —
+and prints a plain-English ✓ / ! / ✗ for each, with a concrete **fix** for anything that isn't right.
+It changes nothing, so it is always safe to run. (Its exit code is non-zero if any check failed, so a
+scheduled job can use it too.)
 
 **You don't have to run it every time.** Once storage is set up, a one-line health summary — archive
 free space, how close you are to the soft cap, and how fresh the last verified backup is — is shown
