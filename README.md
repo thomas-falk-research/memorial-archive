@@ -123,6 +123,11 @@ it never slows a login). It's a heads-up; the full picture is always `./archive-
 
 ## Day-to-day: gathering files
 
+> **New to this?** [`docs/OPERATOR-RUNBOOK.md`](docs/OPERATOR-RUNBOOK.md) is a plain-English,
+> step-by-step walkthrough for a non-technical operator gathering a loved one's files end to end —
+> starting fresh, ingesting each dead/live PC drive and USB **one at a time** with memorable labels,
+> skipping the Windows OS, rebuilding the index, and **finding the will** (including a scanned one).
+
 For everyday work, just run the guided menu:
 
 ```
