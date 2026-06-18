@@ -1,0 +1,3 @@
+# Python bytecode from the CI helpers (e.g. py_compile in ci/check-syntax.sh).
+__pycache__/
+*.pyc

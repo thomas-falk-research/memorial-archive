@@ -1,0 +1,36 @@
+name: CI
+
+# Static analysis for every script in the repo, so a typo, a shellcheck regression, or a
+# docker-compose file that mounts the archive WRITABLE is caught here — never on the family's box.
+# Mirrors `./ci/run.sh`, which you can (and should) run locally before pushing.
+
+on:
+  push:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same ref cancels an in-flight run for it.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static:
+    name: shellcheck · bash -n · compose
+    # Pinned (not ubuntu-latest): this image's apt shellcheck is 0.9.0, the version the clean
+    # baseline was validated against, so CI findings match what a developer sees locally.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools (shellcheck, PyYAML)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends shellcheck python3-yaml
+
+      - name: Run static checks
+        run: bash ci/run.sh
