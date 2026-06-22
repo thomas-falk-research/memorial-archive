@@ -10,6 +10,9 @@
 #   search.<domain>   -> recoll web UI (reverse proxy to 127.0.0.1:8088, keeps its password)
 #   files.<domain>    -> copyparty file browser (127.0.0.1:3923, same password) — only if installed
 #
+# The password-gated apps (search/files/dupes/pdf) ALSO get a dedicated LAN port (default 8090-8093),
+# each carrying the same family password, so they're reachable by raw IP — LAN or tailnet — with no DNS.
+#
 # Pair this with DNS rewrites in AdGuard Home: point those names at the mini-PC's LAN IP. The
 # config accepts any hostname, so it also works over Tailscale once you route/resolve the names.
 #
@@ -37,6 +40,14 @@ STIRLING_DIR="${STIRLING_DIR:-/srv/apps/stirling}"
 DOCMOST_UPSTREAM="${DOCMOST_UPSTREAM:-127.0.0.1:3000}"
 DOCMOST_DIR="${DOCMOST_DIR:-/srv/apps/docmost}"
 SEARCH_USER="${SEARCH_USER:-family}"
+
+# Dedicated LAN ports that re-expose the password-gated, loopback-only apps by raw IP — so they work
+# without DNS (over the LAN or the tailnet). Each port carries the SAME family password as the app's
+# matching *.home route, so direct-IP access is gated identically (never a bypass). Override via env.
+SEARCH_LANPORT="${SEARCH_LANPORT:-8090}"
+FILES_LANPORT="${FILES_LANPORT:-8091}"
+DUPES_LANPORT="${DUPES_LANPORT:-8092}"
+PDF_LANPORT="${PDF_LANPORT:-8093}"
 
 PHOTOS_HOST="photos.${BASE_DOMAIN}"
 DOCS_HOST="docs.${BASE_DOMAIN}"
@@ -71,7 +82,7 @@ Usage: ${0##*/} [--yes|-y] [--reset-search-password] [--help|-h]
   --yes, -y                 skip the confirmation prompt; generate a search password if none exists
   --reset-search-password   set a NEW family/search password (same as RESET_SEARCH_PW=1)
   --help, -h                show this help and exit
-Env overrides: BASE_DOMAIN (default 'home'), SITE_TITLE, RESET_SEARCH_PW, and the *_UPSTREAM addresses.
+Env overrides: BASE_DOMAIN (default 'home'), SITE_TITLE, RESET_SEARCH_PW, the *_UPSTREAM addresses, and the *_LANPORT numbers (defaults 8090-8093).
 USAGE
 }
 while [[ $# -gt 0 ]]; do
@@ -176,22 +187,16 @@ HTMLCARD
   notes_dns="$(printf '        %-16s -> %s' "${DOCMOST_HOST}" "${lan_ip:-<mini-PC IP>}")"
 fi
 
-# Direct-access buttons (LAN IP + Tailscale IP) under the tiles for the apps that are actually
-# published on the network AND carry their own auth: Photos (Immich) and Documents (Paperless) keep
-# their own login, and Search keeps the family password (on its WEBUI_PORT front). These work with no
-# DNS at all. The other tiles (Files/PDF/Notes) stay name-only on purpose — their password lives at
-# the Caddy front door, so a direct IP:port would BYPASS it; reach those via the *.home names once the
-# AdGuard rewrites below are set.
+# Direct-access buttons (LAN IP + Tailscale IP) under the tiles, so every app is reachable with no DNS
+# at all. Photos (Immich) and Documents (Paperless) publish their own port and carry their own login;
+# Search/Files/PDF have no built-in login, so each is reached through its dedicated, password-gated
+# Caddy LAN port (defined above) — never a raw app port, which would BYPASS the family password. Notes
+# (Docmost) stays name-only: its login cookies/links are bound to its *.home host, so a raw IP:port can
+# break sign-in; reach it via docmost.<domain> once the AdGuard rewrites below are set.
 ts_ip=""
 if command -v tailscale >/dev/null 2>&1; then ts_ip="$(tailscale ip -4 2>/dev/null | head -1 || true)"; fi
 IMMICH_PORT="${IMMICH_UPSTREAM##*:}"
 PAPERLESS_PORT="${PAPERLESS_UPSTREAM##*:}"
-WEBUI_PORT="${WEBUI_PORT:-8080}"   # password-protected search web UI (set up by archive-webui-setup.sh)
-# Only offer the direct Search buttons if that web UI is actually listening (it is optional/separate).
-webui_present=false
-if command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${WEBUI_PORT}$"; then
-  webui_present=true
-fi
 
 # Build a small row of "LAN <ip:port>" / "Tailscale <ip:port>" links for a given port.
 iplinks_row() {  # $1 = port; prints a <div class="iplinks">..</div>, or nothing if no IP is known
@@ -203,9 +208,13 @@ iplinks_row() {  # $1 = port; prints a <div class="iplinks">..</div>, or nothing
 }
 photos_iplinks="$(iplinks_row "$IMMICH_PORT")"
 docs_iplinks="$(iplinks_row "$PAPERLESS_PORT")"
-search_iplinks=""
-[[ "$webui_present" == true ]] && search_iplinks="$(iplinks_row "$WEBUI_PORT")"
-info "Direct app buttons → LAN ${lan_ip:-<unknown>}${ts_ip:+, Tailscale ${ts_ip}} (Photos/Documents${webui_present:+/Search})."
+search_iplinks="$(iplinks_row "$SEARCH_LANPORT")"
+files_iplinks=""; [[ "$copyparty_installed" == true ]] && files_iplinks="$(iplinks_row "$FILES_LANPORT")"
+pdf_iplinks="";   [[ "$stirling_installed" == true ]] && pdf_iplinks="$(iplinks_row "$PDF_LANPORT")"
+_btns="Photos, Documents, Search"
+[[ "$copyparty_installed" == true ]] && _btns="${_btns}, Files"
+[[ "$stirling_installed" == true ]] && _btns="${_btns}, PDF"
+info "Portal direct LAN/Tailscale buttons (no DNS) for: ${_btns}."
 
 # ---- Portal page -----------------------------------------------------------------------------
 log "Writing the portal page to ${PORTAL_DIR}"
@@ -254,7 +263,9 @@ ${docs_iplinks}
       <span>Search Everything<br><span class="desc">find any file by word or name</span></span></a>
 ${search_iplinks}
 ${files_card}
+${files_iplinks}
 ${pdf_card}
+${pdf_iplinks}
 ${notes_card}
   </div>
   <footer>${PORTAL_HOST}</footer>
@@ -291,6 +302,14 @@ http://${SEARCH_HOST} {
 	}
 	reverse_proxy ${SEARCH_UPSTREAM}
 }
+
+# Raw-IP access on the LAN / tailnet (no DNS): same family password, dedicated port.
+:${SEARCH_LANPORT} {
+	${auth_dir} {
+		${SEARCH_USER} ${search_hash}
+	}
+	reverse_proxy ${SEARCH_UPSTREAM}
+}
 CADDY
 
 # Append the Files (copyparty) route only when installed. copyparty serves anonymous-read on
@@ -304,8 +323,15 @@ http://${FILES_HOST} {
 	}
 	reverse_proxy ${COPYPARTY_UPSTREAM}
 }
+
+:${FILES_LANPORT} {
+	${auth_dir} {
+		${SEARCH_USER} ${search_hash}
+	}
+	reverse_proxy ${COPYPARTY_UPSTREAM}
+}
 CADDY2
-  info "Added the Files browser route: ${FILES_HOST} -> ${COPYPARTY_UPSTREAM} (password-protected)."
+  info "Added the Files browser route: ${FILES_HOST} (and :${FILES_LANPORT} by IP) -> ${COPYPARTY_UPSTREAM} (password-protected)."
 fi
 
 # Append the duplicate-finder (czkawka) route only when installed — an admin tool, behind the same
@@ -319,8 +345,15 @@ http://${DUPES_HOST} {
 	}
 	reverse_proxy ${CZKAWKA_UPSTREAM}
 }
+
+:${DUPES_LANPORT} {
+	${auth_dir} {
+		${SEARCH_USER} ${search_hash}
+	}
+	reverse_proxy ${CZKAWKA_UPSTREAM}
+}
 CADDY3
-  info "Added the duplicate-finder route: ${DUPES_HOST} -> ${CZKAWKA_UPSTREAM} (password-protected)."
+  info "Added the duplicate-finder route: ${DUPES_HOST} (and :${DUPES_LANPORT} by IP) -> ${CZKAWKA_UPSTREAM} (password-protected; admin tool, no portal tile)."
 fi
 
 # Append the PDF tools (Stirling-PDF) route only when installed — behind the family password.
@@ -333,8 +366,15 @@ http://${PDF_HOST} {
 	}
 	reverse_proxy ${STIRLING_UPSTREAM}
 }
+
+:${PDF_LANPORT} {
+	${auth_dir} {
+		${SEARCH_USER} ${search_hash}
+	}
+	reverse_proxy ${STIRLING_UPSTREAM}
+}
 CADDY4
-  info "Added the PDF tools route: ${PDF_HOST} -> ${STIRLING_UPSTREAM} (password-protected)."
+  info "Added the PDF tools route: ${PDF_HOST} (and :${PDF_LANPORT} by IP) -> ${STIRLING_UPSTREAM} (password-protected)."
 fi
 
 # Append the Notes (Docmost) route only when installed. Docmost has its OWN logins, so — like
@@ -362,7 +402,11 @@ fi
 
 if command -v ufw >/dev/null 2>&1 && sudo ufw status 2>/dev/null | grep -q "Status: active"; then
   sudo ufw allow 80/tcp >/dev/null 2>&1 || true
-  info "opened port 80 in ufw for the local network."
+  sudo ufw allow "${SEARCH_LANPORT}/tcp" >/dev/null 2>&1 || true
+  if [[ "$copyparty_installed" == true ]]; then sudo ufw allow "${FILES_LANPORT}/tcp" >/dev/null 2>&1 || true; fi
+  if [[ "$czkawka_installed"  == true ]]; then sudo ufw allow "${DUPES_LANPORT}/tcp" >/dev/null 2>&1 || true; fi
+  if [[ "$stirling_installed" == true ]]; then sudo ufw allow "${PDF_LANPORT}/tcp"   >/dev/null 2>&1 || true; fi
+  info "opened port 80 and the per-app LAN ports in ufw for the local network."
 fi
 
 log "Done — the front door is up."
@@ -383,9 +427,9 @@ ${notes_dns}
 
     Notes:
       - The portal also loads at  http://${lan_ip:-<mini-PC IP>}/  right now, before any DNS. Photos,
-        Documents and Search show direct "LAN" and "Tailscale" buttons there that work without DNS
-        (each keeps its own login / the family password); the Files/PDF/Notes name-buttons still need
-        the rewrites above to resolve.
+        Documents, Search, Files and PDF show direct "LAN" and "Tailscale" buttons there that work
+        without DNS (each keeps its own login / the family password). Only the Notes name-button still
+        needs the rewrites above to resolve (its login is bound to its *.home host).
       - Paperless: so its login works under the new name, set in /srv/apps/paperless/docker-compose.env
           PAPERLESS_URL=http://${DOCS_HOST}
         then:  cd /srv/apps/paperless && sudo docker compose up -d
