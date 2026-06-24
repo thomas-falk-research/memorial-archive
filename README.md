@@ -194,6 +194,26 @@ read once, then cached). Tune it in `/etc/archive-ingest.conf`: `OCR_ENABLE=fals
 `OCR_LANG=eng+deu` for extra languages. The indexes live **on the archive volume**
 (`/srv/archive/.recoll`, `/srv/archive/.plocate.db`), so they grow with the archive, never the OS disk.
 
+### Making recovered email *browsable*, not just searchable
+
+`archive-index` makes Outlook mail **searchable** (it extracts every PST/OST so recoll indexes the
+messages and attachments). To also make it **browsable** — so a non-technical family member can open
+each drive's *Inbox / Sent / Deleted Items* and every attachment as ordinary files — run:
+
+```
+sudo ./archive-mailbox-build.sh          # DRY-RUN: lists every drive, every mailbox, sizes + a space plan
+sudo ./archive-mailbox-build.sh --go     # extract for real
+archive-index                            # then index it (recovered/ is picked up automatically)
+```
+
+For each drive under `incoming/` it explodes every **unique** mailbox (byte-identical copies in backup
+folders are de-duplicated, with a `DUPLICATES.txt` accounting for the skipped copies) into loose files
+with `readpst -S` at `recovered/<drive>/Mailbox/<original-folder-path>/`. Because that sits under the
+archive root, the **same** mail is also full-text searchable and OCR'd on the next `archive-index` — so
+you do **not** need `archive-index --attachments` (which would only duplicate the loose attachments into
+the hidden `.derived` sidecar). It only **adds** a read-only view under `recovered/`; the verified
+masters under `incoming/` are never touched. It defaults to a dry run and is safe to re-run (incremental).
+
 ---
 
 ## The family: browsing from an iPhone/iPad
