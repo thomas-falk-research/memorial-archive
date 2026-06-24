@@ -14,6 +14,8 @@
 # and three commands:
 #   archive-index    (re)build both indexes over the archive; extracts PST/OST first. Re-run
 #                    after each ingest. Index data lives ON the archive volume, not the OS disk.
+#                    Add --attachments (or EXTRACT_ATTACHMENTS=true) to also save PST/OST
+#                    attachments as loose, browsable/printable files (not just searchable).
 #   archive-search   full-text search of file CONTENTS, with snippets.
 #   archive-find     instant filename search (substring or glob).
 #
@@ -113,6 +115,12 @@ done
 ARCHIVE_ROOT="${ARCHIVE_ROOT:-/srv/archive}"
 RECOLL_CONFDIR="${RECOLL_CONFDIR:-${ARCHIVE_ROOT}/.recoll}"
 PLOCATE_DB="${PLOCATE_DB:-${ARCHIVE_ROOT}/.plocate.db}"
+# Optional attachment extraction: EXTRACT_ATTACHMENTS=true (or `archive-index --attachments`) makes
+# readpst write every message AND attachment as a SEPARATE file, so attachments are browsable / printable
+# loose files — not just searchable. Default keeps the compact mbox extraction (attachment CONTENT is
+# indexed either way). Set EXTRACT_ATTACHMENTS=true in /etc/archive-ingest.conf to make it the default.
+EXTRACT_ATTACHMENTS="${EXTRACT_ATTACHMENTS:-false}"
+case "${1:-}" in --attachments|-a) EXTRACT_ATTACHMENTS=true ;; esac
 # Use a UTF-8 locale so non-ASCII names/keywords work even from a misconfigured shell.
 case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in *[Uu][Tt][Ff]*) : ;; *) export LC_ALL=C.UTF-8 ;; esac
 
@@ -132,13 +140,20 @@ command -v recollindex >/dev/null 2>&1 || { err "recollindex not found — run a
 # (DERIVED_ROOT is under ARCHIVE_ROOT, which is the recoll topdir).
 DERIVED_ROOT="${DERIVED_ROOT:-${ARCHIVE_ROOT}/.derived}"
 if command -v readpst >/dev/null 2>&1; then
-  note "Scanning for Outlook PST/OST mailboxes to extract..."
+  # -S writes every message AND attachment as a separate file (browsable / printable); -r writes a
+  # compact mbox per folder. A distinct output suffix per mode means switching modes rebuilds cleanly
+  # instead of reusing a stale extraction (the up-to-date check below is per-output-directory).
+  if [[ "$EXTRACT_ATTACHMENTS" == "true" ]]; then rp_mode="-S"; rp_suffix=".attachments"
+    rp_desc="separate files — attachments saved as loose files"
+  else rp_mode="-r"; rp_suffix=".extracted"
+    rp_desc="mbox — compact; attachment content indexed but not saved as files"; fi
+  note "Scanning for Outlook PST/OST mailboxes to extract (${rp_desc})..."
   while IFS= read -r -d '' pst; do
     rel="${pst#"${ARCHIVE_ROOT}"/}"                       # path of the .pst relative to the archive root
-    out="${DERIVED_ROOT}/${rel}.extracted"
+    out="${DERIVED_ROOT}/${rel}${rp_suffix}"
     [[ -d "$out" && "$out" -nt "$pst" ]] && continue       # already extracted and up to date
     mkdir -p "$out"
-    if readpst -r -o "$out" "$pst" >/dev/null 2>&1; then note "  extracted: $pst -> ${out}"
+    if readpst "$rp_mode" -o "$out" "$pst" >/dev/null 2>&1; then note "  extracted: $pst -> ${out}"
     else warn "  could not extract (skipped): $pst"; fi
   done < <(find "$ARCHIVE_ROOT/incoming" -type f \( -iname '*.pst' -o -iname '*.ost' \) -print0 2>/dev/null)
 fi
@@ -192,6 +207,7 @@ ok "Indexes updated."
 printf '    full-text index : %s  (%s)\n' "$RECOLL_CONFDIR" "$(du -sh "$RECOLL_CONFDIR" 2>/dev/null | cut -f1)"
 printf '    filename index  : %s\n' "$PLOCATE_DB"
 printf '    coverage        : text inside PDF/Office/email/archives%s; every file findable by name\n' "$([[ -n "$ocr_conf" ]] && echo " + OCR of scanned PDFs")"
+[[ "$EXTRACT_ATTACHMENTS" == "true" ]] && printf '    attachments     : PST/OST attachments saved as loose files under %s/*.attachments\n' "$DERIVED_ROOT"
 printf '    search contents : archive-search "keywords"\n'
 printf '    search names    : archive-find "name"\n'
 SCRIPT
@@ -260,7 +276,8 @@ sudo chmod +x /usr/local/bin/archive-find
 log "Search tools installed."
 cat <<EOF
     After each ingest, refresh the indexes:
-      archive-index
+      archive-index                 # full-text + filename indexes (PST/OST content included)
+      archive-index --attachments   # ...and also save PST/OST attachments as loose files
 
     Then search:
       archive-search "keywords"     # inside files (content) — e.g. archive-search will testament
