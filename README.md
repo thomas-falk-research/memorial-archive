@@ -214,6 +214,22 @@ you do **not** need `archive-index --attachments` (which would only duplicate th
 the hidden `.derived` sidecar). It only **adds** a read-only view under `recovered/`; the verified
 masters under `incoming/` are never touched. It defaults to a dry run and is safe to re-run (incremental).
 
+If `archive-mailbox-build.sh` reports a few `readpst FAILED` lines, those PST/OST files defeated
+`readpst` (libpst) — commonly a 64-bit/4k-page **OST**, which makes it segfault. Recover them with a
+second, more tolerant engine (libpff), passing the failed paths it listed:
+
+```
+sudo apt-get install -y pff-tools
+sudo ./archive-mailbox-recover.sh        <failed.pst>...   # DRY-RUN: probe each with pffinfo
+sudo ./archive-mailbox-recover.sh --go   <failed.pst>...   # re-export the readable ones with pffexport
+```
+
+It probes each file; anything libpff also can't open (a destroyed header) gets a `*.UNRECOVERABLE.txt`
+tombstone so the record still shows the mailbox existed, and the readable ones are re-exported into the
+same browsable `Mailbox/` slot (replacing the truncated partial `readpst` left). Like the build, it is
+read-only, additive under `recovered/`, and **never writes to the masters** — both `pffinfo` and
+`pffexport` open the source read-only (unlike Windows `scanpst.exe`, which repairs in place).
+
 ---
 
 ## The family: browsing from an iPhone/iPad
