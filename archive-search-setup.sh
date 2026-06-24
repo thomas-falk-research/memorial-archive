@@ -187,6 +187,12 @@ topdirs = ${ARCHIVE_ROOT}
 skippedPaths = ${RECOLL_CONFDIR} ${PLOCATE_DB} ${ARCHIVE_ROOT}/images
 followLinks = 0
 indexallfilenames = 1
+# Record extraction FAILURES so they're never silently dropped (our "document every failure" rule).
+# loglevel 2 = errors + warnings only (the failures) — NOT the per-document "update" stream — so the
+# log stays small even over hundreds of thousands of files. It lives under .recoll, which is already
+# in skippedPaths above, so recoll never indexes (or filename-lists) its own log.
+logfilename = ${RECOLL_CONFDIR}/recoll-index.log
+loglevel = 2
 ${ocr_conf}
 EOF
 note "Building/updating the full-text index (incremental; can take a while on first run)..."
