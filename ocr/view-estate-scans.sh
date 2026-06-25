@@ -7,8 +7,10 @@
 # Default IDs are the two prime-suspect estate scans (death cert + valuation letter).
 set -uo pipefail
 
-# Default into recovered/ so copyparty (web root = /srv/archive) actually serves the renders.
-VIEWDIR="${VIEWDIR:-/srv/archive/recovered/estate-view}"
+# Default to a dir your user owns (/srv/archive needs root). View via the http.server line printed at
+# the end. If you CAN write under the archive (e.g. sudo), set VIEWDIR=/srv/archive/recovered/estate-view
+# and copyparty will serve it directly.
+VIEWDIR="${VIEWDIR:-/home/tom/estate-view}"
 DPI="${DPI:-300}"
 PAGES="${PAGES:-40}"   # max pages per PDF to render (raise if a document is longer)
 
@@ -47,5 +49,10 @@ echo
 echo "Viewable files in $VIEWDIR (largest first):"
 ls -laS "$VIEWDIR" 2>/dev/null | sed -n '2,60p'
 echo
-echo "Now OPEN this in copyparty: ${VIEWDIR#/srv/archive}  (i.e. browse to recovered/ -> estate-view/)"
+case "$VIEWDIR" in
+  /srv/archive/*) echo "In copyparty, browse to:  ${VIEWDIR#/srv/archive}" ;;
+esac
+echo "To view from your laptop's browser, run this on the box (Ctrl-C when done):"
+echo "    ( cd \"$VIEWDIR\" && python3 -m http.server 8077 )"
+echo "then open  http://<box-ip>:8077/  and click the PNG / GIF files."
 echo "Bigger PNG = higher detail. If a document is cut off, re-run with PAGES=200."

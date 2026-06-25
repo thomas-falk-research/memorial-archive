@@ -27,10 +27,11 @@ Fax scans often defeat tesseract (a "LAST WILL" header OCRs as "I.AST WlLL"). OC
 ./view-estate-scans.sh                 # the two prime-suspect estate scans -> recovered/estate-view/
 ./view-estate-scans.sh 148044612 ...   # or any recovered-attachment id(s)
 ```
-PDFs become one 300-DPI PNG per page; GIF/JPG/TIF are copied as-is. Output goes to
-`/srv/archive/recovered/estate-view/` — under the archive's **recovered/** (a derived area, never a
-master), which is exactly what copyparty serves, so just browse to **recovered/ -> estate-view/** and
-look. A human reads a 300-DPI fax fine even when every OCR engine mangles it.
+PDFs become one 300-DPI PNG per page; GIF/JPG/TIF are copied as-is. Output goes to a dir your user
+owns (`/home/tom/estate-view/`); the script prints a `python3 -m http.server` one-liner so you can
+view it from your laptop's browser. (If you can write under the archive — e.g. `sudo` — set
+`VIEWDIR=/srv/archive/recovered/estate-view` and copyparty will serve it directly instead.)
+A human reads a 300-DPI fax fine even when every OCR engine mangles it.
 
 ## Usage
 ```
