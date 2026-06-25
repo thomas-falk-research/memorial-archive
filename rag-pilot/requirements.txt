@@ -1,0 +1,13 @@
+# rag-pilot Phase-1 Python deps — CPU ONLY.
+# IMPORTANT: torch's CPU wheel is installed SEPARATELY first by `run.sh setup` via:
+#     pip install torch --index-url https://download.pytorch.org/whl/cpu
+# so that the default (possibly CUDA) torch wheel is never pulled onto this GPU-less box.
+#
+# These are LOWER BOUNDS for review. After a known-good install we run
+#     pip freeze > requirements.lock.txt
+# and pin to that exact set (the discipline: reproducible, not drifting).
+# Re-verify Docling's advanced-options API at install time — it changes between releases.
+
+docling>=2.0
+pymilvus[model]>=2.5     # brings milvus-lite (embedded vector DB) + pymilvus.model.hybrid.BGEM3EmbeddingFunction
+FlagEmbedding>=1.2       # BGE-M3 (also pulled transitively by pymilvus[model]; listed for clarity)
