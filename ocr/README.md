@@ -24,11 +24,13 @@ documents. It is additive and reversible.
 Fax scans often defeat tesseract (a "LAST WILL" header OCRs as "I.AST WlLL"). OCR is only a way to
 *find* and *search* documents — to **identify** a specific scan, render it and read it yourself:
 ```
-./view-estate-scans.sh                 # the two prime-suspect estate scans -> /home/tom/estate-view/
+./view-estate-scans.sh                 # the two prime-suspect estate scans -> recovered/estate-view/
 ./view-estate-scans.sh 148044612 ...   # or any recovered-attachment id(s)
 ```
-PDFs become one 300-DPI PNG per page; GIF/JPG/TIF are copied as-is. Open `/home/tom/estate-view/` in
-copyparty and look. A human reads a 300-DPI fax fine even when every OCR engine mangles it.
+PDFs become one 300-DPI PNG per page; GIF/JPG/TIF are copied as-is. Output goes to
+`/srv/archive/recovered/estate-view/` — under the archive's **recovered/** (a derived area, never a
+master), which is exactly what copyparty serves, so just browse to **recovered/ -> estate-view/** and
+look. A human reads a 300-DPI fax fine even when every OCR engine mangles it.
 
 ## Usage
 ```

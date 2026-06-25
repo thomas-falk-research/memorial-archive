@@ -7,12 +7,15 @@
 # Default IDs are the two prime-suspect estate scans (death cert + valuation letter).
 set -uo pipefail
 
-VIEWDIR="${VIEWDIR:-/home/tom/estate-view}"
+# Default into recovered/ so copyparty (web root = /srv/archive) actually serves the renders.
+VIEWDIR="${VIEWDIR:-/srv/archive/recovered/estate-view}"
 DPI="${DPI:-300}"
 PAGES="${PAGES:-40}"   # max pages per PDF to render (raise if a document is longer)
 
+# Under the archive, ONLY recovered/ and .derived/ are writable; masters (incoming/, images/) are off-limits.
 case "$VIEWDIR" in
-  /srv/archive|/srv/archive/*) echo "ERROR: VIEWDIR must not be under /srv/archive"; exit 1;;
+  /srv/archive/recovered/*|/srv/archive/.derived/*) : ;;                 # allowed derived/working areas
+  /srv/archive|/srv/archive/*) echo "ERROR: under /srv/archive only recovered/ or .derived/ may be written"; exit 1;;
 esac
 command -v archive-find >/dev/null || { echo "ERROR: archive-find not on PATH"; exit 1; }
 command -v pdftoppm    >/dev/null || { echo "ERROR: pdftoppm (poppler-utils) not installed"; exit 1; }
@@ -44,5 +47,5 @@ echo
 echo "Viewable files in $VIEWDIR (largest first):"
 ls -laS "$VIEWDIR" 2>/dev/null | sed -n '2,60p'
 echo
-echo "Now OPEN $VIEWDIR in copyparty (or any image viewer) and look at the pages."
+echo "Now OPEN this in copyparty: ${VIEWDIR#/srv/archive}  (i.e. browse to recovered/ -> estate-view/)"
 echo "Bigger PNG = higher detail. If a document is cut off, re-run with PAGES=200."
