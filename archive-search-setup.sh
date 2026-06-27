@@ -28,9 +28,13 @@ trap 'printf "\n\033[1;31mERROR\033[0m: command failed at line %s\n" "$LINENO" >
 
 # ---- Packages --------------------------------------------------------------------------------
 # recollcmd = recoll's CLI indexer/query without the Qt GUI (right choice for a server).
-CORE_PKGS=( recollcmd plocate pst-utils poppler-utils antiword catdoc unrtf p7zip-full tesseract-ocr tesseract-ocr-eng )
+# python3-py3exiv2 provides the 'pyexiv2' module recoll's rclimg.py image handler needs to run image
+# OCR; without it scanned IMAGES are silently NOT OCR'd (the handler aborts on import).
+CORE_PKGS=( recollcmd plocate pst-utils poppler-utils antiword catdoc unrtf p7zip-full tesseract-ocr tesseract-ocr-eng python3-py3exiv2 )
 # DjVu, RAR/extra archives, WordPerfect, Outlook .msg — each skipped individually if unavailable.
-BEST_EFFORT_PKGS=( djvulibre-bin unar libwpd-tools libemail-outlook-message-perl )
+# libjson-perl + libimage-exiftool-perl: the Perl image-tag handler (recoll's default for jpeg) needs
+# both; without them recoll floods the log with "Can't locate JSON.pm" and indexes jpegs by name only.
+BEST_EFFORT_PKGS=( djvulibre-bin unar libwpd-tools libemail-outlook-message-perl libjson-perl libimage-exiftool-perl )
 SKIPPED=()
 
 ASSUME_YES=false
