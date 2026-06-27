@@ -16,6 +16,24 @@ family services.
 4. **One idempotent `archive-sync`** (dry-run by default) — OCR new files → incremental recoll index →
    Immich scan. Re-runnable; that's the "stays up to date" part.
 
+## Closing recoll's image-OCR blind spot (the will/trust fix)
+recoll OCRs scanned PDFs but not standalone images, so scanned image attachments (incl. the fax TIFFs
+inside the mailboxes) are invisible to content search. Fix = `imgocr = 1` in recoll.conf + a `mimeconf`
+overlay mapping scan-like image types to the `rclimg.py` handler. This is now baked into the generator
+(`archive-search-setup.sh`), gated on `OCR_IMAGES` (default on) and scoped by `OCR_IMAGE_TYPES`
+(default `tiff png gif bmp` — jpeg excluded so the photo collection isn't needlessly OCR'd). OCR output
+is content-hash cached under `.recoll/ocrcache`, so the cost is paid once, even across `-Z`/`-z`.
+
+**Prove it before deploying:** `test-imgocr.sh` builds a throwaway scratch index over a few generated
+files and asserts (1) scan-like images get OCR'd, (2) jpeg does not, (3) other formats still index.
+```
+./test-imgocr.sh        # writes only to /home/tom/recoll-ocrtest; real index untouched
+```
+**Deploy (after the scratch test passes):** re-run `archive-search-setup.sh` to regenerate
+`archive-index`, then a one-time `recollindex -c /srv/archive/.recoll -Z` to retroactively OCR the
+~41k already-indexed scans (in-place reset; non-destructive). New scans are OCR'd incrementally
+thereafter. Run the `-Z` overnight, `nice`/`ionice`'d, so the family services keep their cores.
+
 ## Step 0 — discovery (do this first)
 `discover-state.sh` is a **read-only** census (writes nothing; redacts secrets) of how the three
 front-ends and the archive permissions are currently wired. Its output drives the design choices

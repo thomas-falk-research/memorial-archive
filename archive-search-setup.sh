@@ -169,11 +169,43 @@ mkdir -p "$RECOLL_CONFDIR"
 # etc. in /etc/archive-ingest.conf. The first index is slower (each scan is OCR'd; results are cached).
 # (Standalone photos aren't OCR'd — OCRing every snapshot is slow and useless — they're found by name.)
 ocr_conf=""
+img_mimeconf=""
 if [[ "${OCR_ENABLE:-true}" == "true" ]] && command -v tesseract >/dev/null 2>&1; then
   ocr_conf="ocrprogs = tesseract
 tesseractlang = ${OCR_LANG:-eng}
 pdfocr = 1"
   note "OCR on (tesseract, lang=${OCR_LANG:-eng}): scanned PDFs become searchable by content (slower first index)."
+  # Standalone-IMAGE OCR (recoll >= 1.43.3; handler rclimg.py). recoll OCRs scanned PDFs but NOT
+  # standalone images unless told to, so scanned IMAGES — including image attachments inside mailboxes
+  # (the fax TIFFs) — are otherwise invisible to content search. Enabling needs BOTH 'imgocr = 1' here
+  # AND a mimeconf overlay mapping the image MIME types to rclimg.py (written just below). Scoped to
+  # SCAN-LIKE types only (NOT jpeg) so the photo collection isn't needlessly OCR'd; widen with
+  # OCR_IMAGE_TYPES="tiff png gif bmp jpeg", or turn off with OCR_IMAGES=false. OCR output is
+  # content-hash cached under ${RECOLL_CONFDIR}/ocrcache, so the cost is paid once, even across -Z/-z.
+  if [[ "${OCR_IMAGES:-true}" == "true" ]] && [[ -f /usr/share/recoll/filters/rclimg.py ]]; then
+    ocr_conf="${ocr_conf}
+imgocr = 1"
+    img_mimeconf="[index]"
+    for _t in ${OCR_IMAGE_TYPES:-tiff png gif bmp}; do
+      case "${_t,,}" in
+        tif|tiff) img_mimeconf="${img_mimeconf}
+image/tiff = execm rclimg.py" ;;
+        png)      img_mimeconf="${img_mimeconf}
+image/png = execm rclimg.py" ;;
+        gif)      img_mimeconf="${img_mimeconf}
+image/gif = execm rclimg.py" ;;
+        bmp)      img_mimeconf="${img_mimeconf}
+image/bmp = execm rclimg.py
+image/x-ms-bmp = execm rclimg.py" ;;
+        jpg|jpeg) img_mimeconf="${img_mimeconf}
+image/jpeg = execm rclimg.py" ;;
+        *) warn "  ignoring unknown OCR_IMAGE_TYPES entry: ${_t}" ;;
+      esac
+    done
+    note "Image OCR on (rclimg.py): scanned IMAGES searchable too [types: ${OCR_IMAGE_TYPES:-tiff png gif bmp}]. A 'recollindex -Z' OCRs already-indexed ones (once; cached)."
+  else
+    note "Image OCR off (OCR_IMAGES=false or rclimg.py missing): scanned IMAGES found by NAME only."
+  fi
 else
   note "OCR off (tesseract missing or OCR_ENABLE=false): scanned-only PDFs are found by NAME, not content."
 fi
@@ -195,6 +227,16 @@ logfilename = ${RECOLL_CONFDIR}/recoll-index.log
 loglevel = 2
 ${ocr_conf}
 EOF
+# User mimeconf overlay: route scan-like image MIME types to the OCR-capable handler (rclimg.py).
+# recoll LAYERS this over the system mimeconf — only these keys change; every other format indexes
+# exactly as before. Written only when image OCR is on; our own managed overlay is removed when off
+# (we never touch a hand-made mimeconf — only one carrying our marker line).
+_mimeconf="$RECOLL_CONFDIR/mimeconf"
+if [[ -n "$img_mimeconf" ]]; then
+  printf '# Managed by archive-index — image-OCR overlay; do not edit by hand.\n%s\n' "$img_mimeconf" > "$_mimeconf"
+elif [[ -f "$_mimeconf" ]] && head -1 "$_mimeconf" 2>/dev/null | grep -q 'image-OCR overlay'; then
+  rm -f "$_mimeconf"
+fi
 note "Building/updating the full-text index (incremental; can take a while on first run)..."
 recollindex -c "$RECOLL_CONFDIR" >/dev/null 2>&1 || { err "recollindex failed."; exit 1; }
 
