@@ -43,10 +43,10 @@ and mid-release; picking a version is a real decision, not a formality.
 |---|---|---|
 | Core | Python + **PyTorch** | **Rust** (PDFium text extraction, ONNX Runtime, Rayon parallelism) |
 | Install footprint | **~1,032 MB**, heavy dep tree | **~71 MB, ~20 deps** (vendor-published) |
-| Parse-stage RAM | ~2.4 GB peak (pypdfium) / 6.16 GB (native) | far lower **[unmeasured — the number we must produce]** |
+| Parse-stage RAM | ~2.4 GB peak (pypdfium) / 6.16 GB (native) | **276 MiB peak — MEASURED on archive-pc, 2026-07-27** (~9–22x lighter) |
 | Hang risk | **`document_timeout` is broken** (issue #2381): >1 hr hangs, un-interruptible | no equivalent known defect; we keep the OS-level timeout anyway |
 | Memory leak | **batch leak** (issue #2788) → must restart workers between batches | not applicable |
-| Throughput | slow on CPU; *every* published figure was **OCR-off** | vendor claims **35+ files/sec** and "Docling often 60+ min/file" |
+| Throughput | slow on CPU; *every* published figure was **OCR-off** | **MEASURED: 0.33 s/file mean, 3.0 files/s, OCR ON** (vendor claimed 35+/s) |
 | **Mailbox formats** | ✗ | **PST, MSG, EML — with recursive attachment extraction** |
 | **Archive formats** | ✗ | ZIP, TAR, 7Z, recursive |
 | **Fax/scan formats** | PDF-centric | TIFF, **JBIG2** (the fax codec), HEIC, JPEG2000, WebP, SVG |
@@ -71,6 +71,41 @@ box whose binding constraint is RAM.
 **Open question (§6):** whether BGE-M3's *sparse* vectors are available through xberg's ONNX path. If
 not, keep BGE-M3 on torch for the embed stage only — still a large win, since parse and embed already
 run as separate, never-co-resident processes.
+
+---
+
+## 2a. MEASURED on archive-pc — 2026-07-27
+
+The assessment's two biggest unknowns are now numbers, taken on the real box against the real corpus
+with OCR **on** (`probe-extractor-capability.sh bench 20`, 20 files, 10.4 MiB):
+
+| Metric | Measured | What it replaces |
+|---|---|---|
+| **Peak RSS** | **276 MiB** | Docling's ~2.4 GB (pypdfium) / 6.16 GB (native) — **9–22x lighter** |
+| Mean per file | **0.33 s** | granite-docling's 15–20 min/doc on CPU |
+| Throughput | 3.0 files/s · 1.56 MiB/s | — |
+| Slowest in sample | 3.4 s (a born-digital PDF) | — |
+| OCR on real scans | **works** — 293 / 74 / 86 words from three real scans | the gate's uncovered case |
+
+**What the RAM figure changes:** the entire "never hold two heavy stages resident" anxiety in the
+original assessment was written around a 2.4–6.16 GB parser. At **276 MiB** the parse stage is no longer
+a memory event at all — it is smaller than Immich's Redis. Parsing can run alongside the family services
+without the elaborate sequencing the original design required, and could even be parallelised across a
+few cores if throughput ever matters.
+
+**Honest reading of the throughput number.** The 0.33 s mean is dragged down by born-digital files that
+need no OCR; the genuinely OCR'd scans in the `ocr` run took **0.37 s, 1.18 s and 2.15 s**. Budget
+**~1–3 s per scanned page**, not 0.33 s. On that basis a 40k-scan corpus is roughly **11–33 hours
+single-threaded** — an overnight-to-weekend job, and parallelisable — versus the *weeks* Docling implied.
+The sample is 20 files and skewed by whatever the filename index returned first; re-measure on the
+actual selected corpus before committing to a full run.
+
+**A corpus-selection finding, free from the sample.** The auto-picker's first hit was a **browser
+screenshot** (Firefox chrome OCR'd as "File Edit View History Bookmarks"), and two of three were
+`.jpeg`/`.png` under `MKH Clients/`. Two consequences: (a) the scan-vs-photo/screenshot problem is real
+and needs a filter, exactly as the Paperless design note found; (b) **the picker has no notion of whose
+documents these are** — it surfaced client files. Selection for the real corpus must be scoped
+deliberately, per the standing rule about third parties' private material.
 
 ---
 
@@ -208,10 +243,10 @@ a different package is a different set of network behaviours.
 
 Replacing the original assessment's parser questions:
 
-1. **xberg OCR-on throughput** on the i5-10500T: real seconds/page on our actual faxes and scans. This
-   was the #1 unknown before and remains #1 — only the subject changed.
-2. **Peak RSS during extraction**, including the worst real inputs we own (large multi-page TIFF faxes,
-   the 1.67 GB PST).
+1. ~~**xberg OCR-on throughput**~~ — **ANSWERED (§2a): ~1–3 s per OCR'd scan, 0.33 s/file mixed mean.**
+   Still to re-measure on the actual selected corpus, which will be scan-heavier than the sample.
+2. ~~**Peak RSS during extraction**~~ — **ANSWERED (§2a): 276 MiB.** Still untested against the worst
+   inputs we own (large multi-page TIFF faxes, the 1.67 GB mailbox).
 3. **PST traversal correctness** — does it enumerate every message and attachment, and does the recursive
    image extraction actually reach the fax scans? Cross-check the count against our existing PST extraction.
 4. **Does the ONNX embedding path emit sparse vectors** (BGE-M3-equivalent), i.e. can PyTorch leave the
