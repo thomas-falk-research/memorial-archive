@@ -163,12 +163,33 @@ APIs deserves exactly the scrutiny this archive's rules demand. What the documen
 no outbound connection.** Model weights downloading once is acceptable; a document — or a hash, or a
 filename, or a "usage event" — leaving this box is not, ever.
 
-The test is simple and decisive, and it is written: `rag-pilot/verify-xberg-offline.sh` installs the
-pinned version into a throwaway venv on the NVMe, extracts **synthetic** documents it generates itself,
-and then **re-runs the identical extraction with the network namespace removed** (`unshare -rn`). If the
-results are byte-identical with no network at all, the library provably needs no egress at runtime. It
-also inspects the installed package for telemetry defaults and reports every environment variable that
-could enable a remote backend. Only after it passes clean does anything real get parsed.
+The test is written: `rag-pilot/verify-xberg-offline.sh` installs the pinned version into a throwaway
+venv on the NVMe, extracts **synthetic** documents it generates itself, and then re-runs the identical
+extraction **with no network at all**. Byte-identical results prove the library needs no egress at
+runtime.
+
+Getting "no network at all" on this box needed three methods, because **Ubuntu 23.10+ blocks
+unprivileged user namespaces by AppArmor default** — the clean `unshare -rn` is simply denied on stock
+24.04 (confirmed on archive-pc). In descending order of strength:
+
+| Method | What it does | Needs |
+|---|---|---|
+| **A** `unshare -rn` | removes the network entirely — prevention | nothing (blocked on stock 24.04) |
+| **B** `sudo unshare -n` + `setpriv` back to the user | same prevention; root only creates the namespace, the extractor still runs unprivileged and leaves no root-owned files | sudo (`--sudo-netns`) |
+| **C** `strace -e trace=network` | *observes* every `connect()`; flags any non-loopback `AF_INET` | strace |
+
+A and B **prove** it; C is strong evidence from one observed run and says so rather than overclaiming.
+If none is available the script reports **UNPROVEN** and exits non-zero — it never defaults to "probably
+fine". Both failure paths are tested: with a deliberately phoning-home stub extractor, method C catches
+the `connect()` to 1.1.1.1 and refuses to certify.
+
+The script also separates telemetry-string matches in **source** from those in compiled `.so`/SBOM
+artifacts (onnxruntime carries platform tracing hooks it never activates on Linux — lumping them in
+produces a scary warning that means nothing), and reports any environment variable that could enable a
+remote backend. Only after a clean verdict does anything real get parsed.
+
+**Result on archive-pc (2026-07-27):** installed licence confirmed **MIT** for `kreuzberg 4.10.2`,
+settling §4.3 — the Elastic-2.0 metadata belongs to the placeholder alias package, not the real library.
 
 ---
 

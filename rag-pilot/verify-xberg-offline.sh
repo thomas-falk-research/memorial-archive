@@ -56,8 +56,15 @@ case "$VERIFY_HOME" in
   "$ARCHIVE_ROOT"|"$ARCHIVE_ROOT"/*) die "VERIFY_HOME ($VERIFY_HOME) must NOT be under the archive ($ARCHIVE_ROOT).";;
 esac
 
-GO=0; ARGS=()
-for a in "$@"; do if [ "$a" = "--go" ]; then GO=1; else ARGS+=("$a"); fi; done
+GO=0; SUDO_NETNS=0; STRACE_ALWAYS=0; ARGS=()
+for a in "$@"; do
+  case "$a" in
+    --go)          GO=1 ;;
+    --sudo-netns)  SUDO_NETNS=1 ;;   # allow sudo to create the empty network namespace
+    --strace)      STRACE_ALWAYS=1 ;; # also run the syscall audit even if a namespace worked
+    *)             ARGS+=("$a") ;;
+  esac
+done
 cmd="${ARGS[0]:-verify}"
 
 if [ "$cmd" = "teardown" ]; then
@@ -154,25 +161,36 @@ done
 say "  (README claims MIT; the PyPI alias package declared Elastic-2.0 — this is the authoritative answer)"
 
 hdr "Telemetry / remote-backend surface (grep of the installed package)"
-hits="$(grep -rlniE 'telemetry|analytics|posthog|sentry|mixpanel|phone_?home' "$VENV/lib" 2>/dev/null | head -20)"
-if [ -n "$hits" ]; then
-  warn "files mentioning telemetry-ish names (presence != enabled — read before trusting):"
-  printf '%s\n' "$hits" | sed 's/^/    /'
+# Split source matches from compiled artifacts. Shared objects and SBOMs practically always contain
+# these strings (onnxruntime carries platform tracing hooks it never activates on Linux), so lumping
+# them together produces a scary warning that means nothing. Source matches are what deserve a read.
+tel_all="$(grep -rlniE 'telemetry|analytics|posthog|sentry|mixpanel|phone_?home' "$VENV/lib" 2>/dev/null || true)"
+tel_src="$(printf '%s\n' "$tel_all" | grep -vE '\.(so|so\.[0-9.]*|pyc|dylib|dll)$|/pip/|dist-info/sboms/|\.json$' | grep -v '^$' || true)"
+tel_bin="$(printf '%s\n' "$tel_all" | grep -E  '\.(so|so\.[0-9.]*|pyc|dylib|dll)$|dist-info/sboms/|\.json$' | grep -v '^$' || true)"
+if [ -n "$tel_src" ]; then
+  warn "SOURCE files mentioning telemetry-ish names — read these before trusting the library:"
+  printf '%s\n' "$tel_src" | sed 's/^/    /'
 else
-  ok "no telemetry/analytics identifiers found in the installed package"
+  ok "no telemetry/analytics identifiers in any SOURCE file of the extractor"
+fi
+if [ -n "$tel_bin" ]; then
+  say "  (also matched in compiled/SBOM artifacts, which is normal and not evidence of anything:"
+  printf '%s\n' "$tel_bin" | sed 's|.*/||; s/^/     - /' | head -6
+  say "   the offline pass below is what actually settles this.)"
 fi
 say "  env vars in this shell that could enable a REMOTE backend (should be empty):"
 env | grep -iE '^(OPENAI|ANTHROPIC|GOOGLE|GEMINI|AZURE|COHERE|MISTRAL|HF|HUGGING)' | sed 's/=.*/=<set>/' | sed 's/^/    /' \
   || true
 
 # ---- the extraction runner ---------------------------------------------------------------------
-# VERIFY-AT-INSTALL: the entry point moved with the rebrand (xberg CLI, kreuzberg CLI, or the Python
-# API). Try them in order and report which one answered, rather than guessing at a name.
-RUNNER=""
-if   [ -x "$VENV/bin/xberg" ];     then RUNNER="cli:$VENV/bin/xberg"
-elif [ -x "$VENV/bin/kreuzberg" ]; then RUNNER="cli:$VENV/bin/kreuzberg"
-else RUNNER="py"; fi
-say ""; ok "extraction entry point: $RUNNER"
+# Prefer the PYTHON API: it is what the pilot's parse stage will actually call (parse_one.py), so it is
+# the surface worth certifying. The CLI is a fallback only.
+# CORRECTED: `kreuzberg extract FILE` writes to STDOUT — there is no --output-dir flag. The first
+# version of this script invented one, so pass 1 produced zero files and certified nothing.
+CLI=""
+if   [ -x "$VENV/bin/xberg" ];     then CLI="$VENV/bin/xberg"
+elif [ -x "$VENV/bin/kreuzberg" ]; then CLI="$VENV/bin/kreuzberg"; fi
+say ""; ok "extraction entry point: python API${CLI:+  (CLI also present: ${CLI##*/})}"
 
 # STUB GUARD — refuse to certify a placeholder. `pip install xberg` resolves to the 0.1.0 alias package
 # (see the pin comment at the top), which imports but extracts nothing. Without this check the two passes
@@ -231,57 +249,126 @@ for src in sys.argv[2:]:
     (outdir / (p.name + ".txt")).write_text(text, encoding="utf-8", errors="replace")
 PYEOF
 
-run_extract() {  # run_extract <outdir> [network-wrapper...]
+run_extract() {  # run_extract <outdir> [wrapper...] — wrapper prefixes the command (e.g. unshare)
   local outdir="$1"; shift
-  case "$RUNNER" in
-    cli:*) "$@" "${RUNNER#cli:}" extract --output-dir "$outdir" "$DOCS"/* ;;
-    py)    "$@" "$PY" "$VERIFY_HOME/extract_all.py" "$outdir" "$DOCS"/* ;;
-  esac
+  "$@" "$PY" "$VERIFY_HOME/extract_all.py" "$outdir" "$DOCS"/*
 }
 fingerprint() { find "$1" -type f | LC_ALL=C sort | xargs -r sha256sum 2>/dev/null | awk '{print $1}' | sha256sum | awk '{print $1}'; }
+show_log() { say "  --- last 15 lines of ${1##*/} ---"; tail -15 "$1" 2>/dev/null | sed 's/^/    /'; }
 
 # ---- pass 1: with network ----------------------------------------------------------------------
 hdr "Pass 1 — extraction WITH network (models may download now)"
 rm -rf "${OUT_NET:?}"/* 2>/dev/null
-if run_extract "$OUT_NET" >>"$LOGS/pass1.log" 2>&1; then ok "pass 1 completed"; else warn "pass 1 returned non-zero — see $LOGS/pass1.log"; fi
+run_extract "$OUT_NET" >>"$LOGS/pass1.log" 2>&1 || warn "pass 1 returned non-zero"
 n1="$(find "$OUT_NET" -type f 2>/dev/null | wc -l)"; fp1="$(fingerprint "$OUT_NET")"
 say "  outputs: $n1   fingerprint: ${fp1:0:16}…"
+# Fail FAST and loudly. A pass that extracted nothing cannot certify anything, and continuing would
+# only produce a second empty result that trivially "matches" the first.
+if [ "$n1" -eq 0 ]; then
+  err "Pass 1 produced NO output — extraction did not run, so nothing can be certified."
+  show_log "$LOGS/pass1.log"
+  err "Fix the extraction call before trusting any verdict from this script."
+  exit 2
+fi
+# Sanity: the output must actually contain extracted text, not empty files or error markers.
+if grep -rq 'EXTRACTION-ERROR' "$OUT_NET" 2>/dev/null; then
+  warn "some documents recorded an extraction error (kept, not hidden):"
+  grep -rh 'EXTRACTION-ERROR' "$OUT_NET" | sed 's/^/    /' | head -5
+fi
+ok "pass 1 extracted $n1 documents"
 
-# ---- pass 2: no network at all -----------------------------------------------------------------
-hdr "Pass 2 — extraction with NO NETWORK (unshare -rn)"
-if ! command -v unshare >/dev/null 2>&1; then
-  warn "unshare not available — CANNOT run the offline proof. Install util-linux, or run this on the box."
-  warn "VERDICT: UNPROVEN. Do not point the extractor at family documents on this evidence."
-  exit 2
+# ---- pass 2: prove it needs no network ---------------------------------------------------------
+# Layered, because Ubuntu 23.10+ restricts unprivileged user namespaces by AppArmor default, so the
+# clean `unshare -rn` is simply denied on a stock 24.04 box. Strongest available method wins:
+#   A  unshare -rn                    prevention, no privileges          (blocked on stock Ubuntu 24.04)
+#   B  sudo unshare -n + setpriv      prevention, needs sudo             (--sudo-netns)
+#   C  strace network syscall audit   observation, no privileges         (evidence, not prevention)
+hdr "Pass 2 — prove extraction needs no network"
+METHOD=""; fp2=""; n2=0
+try_pass2() {  # try_pass2 <label> <wrapper...>
+  local label="$1"; shift
+  rm -rf "${OUT_OFF:?}"/* 2>/dev/null
+  if run_extract "$OUT_OFF" "$@" >>"$LOGS/pass2.log" 2>&1; then
+    n2="$(find "$OUT_OFF" -type f 2>/dev/null | wc -l)"
+    [ "$n2" -gt 0 ] && { METHOD="$label"; fp2="$(fingerprint "$OUT_OFF")"; return 0; }
+  fi
+  return 1
+}
+
+if unshare -rn true 2>/dev/null && try_pass2 "network namespace (unprivileged)" unshare -rn --; then
+  ok "ran with the network namespace removed — no privileges needed"
+elif [ "$SUDO_NETNS" = 1 ]; then
+  say "  unprivileged namespaces unavailable — using sudo to create one (you may be prompted)"
+  # root makes the empty netns, then setpriv drops straight back to you, so nothing in the sandbox
+  # ends up root-owned and the extractor never runs with privileges.
+  if sudo -v && try_pass2 "network namespace (sudo, dropped back to $(id -un))" \
+        sudo unshare -n -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --; then
+    ok "ran inside a root-created network namespace, as your own user"
+  fi
 fi
-if ! unshare -rn true 2>/dev/null; then
-  warn "unprivileged network namespaces are not permitted here — CANNOT run the offline proof."
-  warn "VERDICT: UNPROVEN. Do not point the extractor at family documents on this evidence."
-  exit 2
+
+STRACE_RESULT=""
+if [ -z "$METHOD" ] || [ "$STRACE_ALWAYS" = 1 ]; then
+  if command -v strace >/dev/null 2>&1; then
+    say "  running a syscall audit (observes outbound connections rather than preventing them)"
+    rm -rf "${OUT_OFF:?}"/* 2>/dev/null
+    strace -f -qq -e trace=network -o "$LOGS/strace.log" \
+      "$PY" "$VERIFY_HOME/extract_all.py" "$OUT_OFF" "$DOCS"/* >>"$LOGS/pass2.log" 2>&1
+    n2="$(find "$OUT_OFF" -type f 2>/dev/null | wc -l)"; [ "$n2" -gt 0 ] && fp2="$(fingerprint "$OUT_OFF")"
+    # Only AF_INET/AF_INET6 connects leave the machine. AF_UNIX and AF_NETLINK are local IPC.
+    outbound="$(grep -E 'connect\(' "$LOGS/strace.log" 2>/dev/null | grep -E 'AF_INET' | grep -v '127\.0\.0\.1\|::1' || true)"
+    if [ -n "$outbound" ]; then
+      STRACE_RESULT="dirty"
+      err "OUTBOUND CONNECTION ATTEMPTS OBSERVED during extraction:"
+      printf '%s\n' "$outbound" | sed 's/^/    /' | head -10
+    else
+      STRACE_RESULT="clean"
+      ok "syscall audit: no outbound (AF_INET) connections during extraction"
+    fi
+    [ -z "$METHOD" ] && METHOD="syscall audit (strace)"
+  else
+    warn "strace is not installed — no fallback evidence available (sudo apt install strace)"
+  fi
 fi
-rm -rf "${OUT_OFF:?}"/* 2>/dev/null
-if run_extract "$OUT_OFF" unshare -rn -- >>"$LOGS/pass2.log" 2>&1; then ok "pass 2 completed with no network"; else warn "pass 2 returned non-zero — see $LOGS/pass2.log"; fi
-n2="$(find "$OUT_OFF" -type f 2>/dev/null | wc -l)"; fp2="$(fingerprint "$OUT_OFF")"
-say "  outputs: $n2   fingerprint: ${fp2:0:16}…"
 
 # ---- verdict -----------------------------------------------------------------------------------
 hdr "VERDICT"
 rc=0
-if [ "$n1" -eq 0 ] || [ "$n2" -eq 0 ]; then
-  err "one of the passes produced NO output — the test did not actually exercise extraction."
-  err "Inconclusive. Read $LOGS/pass1.log and $LOGS/pass2.log before going further."; rc=2
-elif [ "$fp1" = "$fp2" ]; then
-  ok "Extraction is byte-identical WITH and WITHOUT network access."
-  ok "The extractor requires NO outbound connection at runtime on these formats."
-  say "  Remaining caveats before real documents:"
-  say "   - first-use model downloads (OCR weights) still need network ONCE; re-run after they are cached"
-  say "   - this covered text/eml/csv/pdf. Re-run with an IMAGE to exercise the OCR path before trusting it there."
-  say "   - keep every *_API_KEY unset; cloud backends are inert without one."
-else
-  err "Outputs DIFFER between the networked and offline passes."
-  err "Something behaved differently when the network was available. Do NOT point this at family"
-  err "documents until that difference is understood. Compare: $OUT_NET vs $OUT_OFF"; rc=1
+case "$METHOD" in
+  "network namespace"*)
+    if [ "$fp1" = "$fp2" ]; then
+      ok "PROVEN: extraction is byte-identical with the network REMOVED (${METHOD})."
+      ok "The extractor requires no outbound connection at runtime."
+    else
+      err "Outputs DIFFER between the networked and network-less passes (${METHOD})."
+      err "Something behaved differently when the network was reachable. Do NOT point this at"
+      err "family documents until that is understood. Compare: $OUT_NET vs $OUT_OFF"; rc=1
+    fi ;;
+  "syscall audit"*)
+    if [ "$STRACE_RESULT" = clean ] && [ "$fp1" = "$fp2" ]; then
+      ok "STRONG EVIDENCE: no outbound connections observed, and output is identical."
+      say "  This observed one run rather than preventing egress outright. To get the stronger"
+      say "  proof, re-run with:   bash ${0##*/} --go --sudo-netns"
+    else
+      err "Syscall audit did not come back clean. Treat as UNPROVEN."; rc=1
+    fi ;;
+  *)
+    warn "Could not run any offline proof on this box."
+    warn "  unprivileged namespaces are blocked (Ubuntu 23.10+ AppArmor default) and strace is absent."
+    warn "VERDICT: UNPROVEN — do not point the extractor at family documents on this evidence."
+    say  "  Options:   bash ${0##*/} --go --sudo-netns      (root creates the namespace, runs as you)"
+    say  "             sudo apt install strace && bash ${0##*/} --go"
+    rc=2 ;;
+esac
+
+if [ "$rc" = 0 ]; then
+  say ""
+  say "  Caveats that remain before real documents:"
+  say "   - first-use model downloads (OCR weights) need network ONCE; this proves RUNTIME independence"
+  say "   - this covered text/eml/csv/pdf. Exercise the OCR path with a real IMAGE before trusting it there"
+  say "   - keep every *_API_KEY unset; the cloud backends are inert without one"
 fi
 say ""
+say "Installed licence + version are reported above — that settles the MIT/Elastic-2.0 question."
 say "Sandbox: $VERIFY_HOME   ·   remove it with:  bash ${0##*/} teardown --go"
 exit "$rc"
