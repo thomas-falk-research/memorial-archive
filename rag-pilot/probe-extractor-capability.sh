@@ -69,6 +69,33 @@ wrap(){
 # Reject a path that is not what it claims to be, before we spend minutes on it.
 need_readable(){ [ -r "$1" ] || die "not readable: $1"; }
 
+# pick_files <count> <ext-regex> — choose real candidates from the archive, READ-ONLY, so nobody has
+# to paste paths (and so a placeholder can never be mistaken for one). Prefers the plocate database
+# (instant); falls back to find. Scoped to incoming/ recovered/ .derived — never images/, which holds
+# photo and forensic masters that are Immich's and forensics' territory, not the extractor's.
+pick_files(){
+  local count="$1" re="$2" db="$ARCHIVE_ROOT/.plocate.db"
+  {
+    if command -v plocate >/dev/null 2>&1 && [ -r "$db" ]; then
+      plocate -d "$db" -i --regex "$re" 2>/dev/null
+    else
+      warn "plocate db unreadable — falling back to find (slower)" >&2
+      find "$ARCHIVE_ROOT/incoming" "$ARCHIVE_ROOT/recovered" "$ARCHIVE_ROOT/.derived" \
+        -type f -regextype posix-extended -iregex ".*$re" 2>/dev/null
+    fi
+  } | awk -v arc="$ARCHIVE_ROOT" '
+      index($0, arc "/") == 1 {
+        rest = substr($0, length(arc) + 2); split(rest, a, "/")
+        if (a[1] == "incoming" || a[1] == "recovered" || a[1] == ".derived") print
+      }' \
+    | while IFS= read -r f; do
+        sz="$(stat -c %s "$f" 2>/dev/null || echo 0)"
+        # skip empties and anything big enough to be a memory risk on a first probe
+        [ "$sz" -gt 1024 ] && [ "$sz" -lt 52428800 ] && printf '%s\n' "$f"
+      done \
+    | head -"$count"
+}
+
 # ---- the timed, single-file extractor ----------------------------------------------------------
 cat >"$OUT/extract_timed.py" <<'PYEOF'
 """extract_timed.py SRC OUT.json — extract ONE file, record text + honest timings + metadata.
@@ -292,41 +319,73 @@ PYEOF
   ;;
 # ------------------------------------------------------------------------------------------------
 ocr)
-  src="${ARGS[1]:-}"; [ -n "$src" ] || die "usage: $0 ocr <path-to-a-real-scan>"
-  need_readable "$src"
-  hdr "OCR path on a REAL scan (the case the egress gate did not cover)"
-  say "  source (read-only): $src"
-  say "  size: $(du -h "$src" 2>/dev/null | cut -f1)"
-  guard_mem
-  rc="$(wrap bash -c "$(declare -f run_one); OUT='$OUT'; PY='$PY'; run_one '$src' ocr-probe '$DOC_TIMEOUT'" 2>/dev/null)"
-  [ -s "$OUT/ocr-probe.json" ] || { err "no result written"; tail -5 "$OUT/ocr-probe.err" 2>/dev/null | sed 's/^/    /'; exit 1; }
-  chars="$(jget "$OUT/ocr-probe.json" chars)"; words="$(jget "$OUT/ocr-probe.json" words)"
-  secs="$(jget "$OUT/ocr-probe.json" convert_secs)"; okflag="$(jget "$OUT/ocr-probe.json" ok)"
-  say ""
-  say "  extracted : ${chars:-0} chars / ${words:-0} words in ${secs:-?}s   (peak RSS $(peak_mib "$OUT/ocr-probe.json") MiB)"
-  say "  --- first 300 chars ---"
-  jget "$OUT/ocr-probe.json" preview | sed 's/^/    /'
-  say "  -----------------------"
-  if [ "$okflag" != "True" ]; then
-    err "extraction FAILED: $(jget "$OUT/ocr-probe.json" error)"; exit 1
-  elif [ "${words:-0}" -lt 5 ]; then
-    warn "Almost no text came out. Either this scan is blank/graphical, or OCR did not engage."
-    warn "Try another scan before concluding. If it is consistently empty, the tesseract extra"
-    warn "may not be wired up in this build — that is a blocker for the whole scanned corpus."
+  hdr "OCR path on REAL scans (the case the egress gate did not cover)"
+  src="${ARGS[1]:-}"
+  if [ -n "$src" ]; then
+    need_readable "$src"; picked=("$src")
   else
-    ok "OCR produced real text from a real scan."
+    say "  no path given — picking real scans from the archive (read-only)…"
+    mapfile -t picked < <(pick_files "${OCR_SAMPLES:-3}" '\.(tif|tiff|png|jpg|jpeg)$')
+    [ "${#picked[@]}" -gt 0 ] || die "found no candidate scans under $ARCHIVE_ROOT — pass a path explicitly."
+    say "  testing ${#picked[@]}: one blank scan proves nothing, so we try several."
+  fi
+  guard_mem
+  any_text=0; failures=0; k=0
+  for src in "${picked[@]}"; do
+    k=$((k+1)); tag="ocr-$k"
+    say ""
+    say "  [$k] $src"
+    say "      size: $(du -h "$src" 2>/dev/null | cut -f1)"
+    wrap bash -c "$(declare -f run_one); OUT='$OUT'; PY='$PY'; run_one \"\$1\" $tag '$DOC_TIMEOUT'" _ "$src" >/dev/null 2>&1
+    if [ ! -s "$OUT/$tag.json" ]; then
+      err "      no result written"; tail -3 "$OUT/$tag.err" 2>/dev/null | sed 's/^/        /'
+      failures=$((failures+1)); continue
+    fi
+    chars="$(jget "$OUT/$tag.json" chars)"; words="$(jget "$OUT/$tag.json" words)"
+    secs="$(jget "$OUT/$tag.json" convert_secs)"; okflag="$(jget "$OUT/$tag.json" ok)"
+    if [ "$okflag" != "True" ]; then
+      err "      FAILED: $(jget "$OUT/$tag.json" error)"; failures=$((failures+1)); continue
+    fi
+    say "      ${chars:-0} chars / ${words:-0} words in ${secs:-?}s   (peak RSS $(peak_mib "$OUT/$tag.json") MiB)"
+    if [ "${words:-0}" -ge 5 ]; then
+      any_text=1
+      say "      --- first 200 chars ---"
+      jget "$OUT/$tag.json" preview | head -c 200 | sed 's/^/        /'; say ""
+    else
+      say "      (no usable text — blank, graphical, or OCR did not engage)"
+    fi
+  done
+  hdr "OCR VERDICT"
+  if [ "$any_text" = 1 ]; then
+    ok "OCR produced real text from a real scan — the scanned corpus is reachable."
+  elif [ "$failures" = "${#picked[@]}" ]; then
+    err "Every extraction FAILED. This is an install problem, not a corpus problem."; exit 1
+  else
+    err "Extraction ran but produced NO usable text on any sample."
+    err "That is the blocker case: the tesseract extra is probably not wired up in this build,"
+    err "and without OCR the entire scanned corpus — the faxes, the will — stays invisible."
+    say "  Check: $VENV/bin/python -c 'import kreuzberg; print(kreuzberg.__version__)'"
+    say "         and whether a system tesseract is present:  tesseract --version"
+    say "  Re-run against a scan you KNOW has text before concluding."
+    exit 1
   fi
   ;;
 # ------------------------------------------------------------------------------------------------
 bench)
   dir="${ARGS[1]:-}"; n="${ARGS[2]:-$SAMPLE_N}"
-  [ -n "$dir" ] || die "usage: $0 bench <dir-of-real-scans> [N]"
-  [ -d "$dir" ] || die "not a directory: $dir"
+  # A bare number as the first argument means "sample N from the whole archive".
+  case "$dir" in ''|*[!0-9]*) ;; *) n="$dir"; dir="" ;; esac
   hdr "Throughput + peak RSS over $n real files (the assessment's #1 unknown)"
   guard_mem
-  mapfile -t files < <(find "$dir" -type f \( -iname '*.pdf' -o -iname '*.tif' -o -iname '*.tiff' \
-    -o -iname '*.png' -o -iname '*.jpg' \) -size -50M 2>/dev/null | head -"$n")
-  [ "${#files[@]}" -gt 0 ] || die "no candidate files under $dir"
+  if [ -n "$dir" ]; then
+    [ -d "$dir" ] || die "not a directory: $dir"
+    mapfile -t files < <(find "$dir" -type f \( -iname '*.pdf' -o -iname '*.tif' -o -iname '*.tiff' \
+      -o -iname '*.png' -o -iname '*.jpg' \) -size -50M -size +1k 2>/dev/null | head -"$n")
+  else
+    say "  no directory given — sampling real files from the archive (read-only)…"
+    mapfile -t files < <(pick_files "$n" '\.(pdf|tif|tiff|png|jpg|jpeg)$')
+  fi
+  [ "${#files[@]}" -gt 0 ] || die "no candidate files found${dir:+ under $dir}"
   say "  sampling ${#files[@]} files, one process each, ${DOC_TIMEOUT}s OS timeout"
   : >"$OUT/bench.tsv"
   i=0; fails=0
@@ -413,8 +472,10 @@ pst)
   say "Usage: ${0##*/} <formats|ocr SRC|bench DIR [N]|pst SRC> [--netns]"
   say ""
   say "  formats           can this build read PST/MSG/EML/TIFF?  (decides the Phase-2 route)"
-  say "  ocr SRC           does OCR yield real text from a real scan?"
-  say "  bench DIR [N]     seconds/file + PEAK RSS over N real files"
+  say "  ocr [SRC]         does OCR yield real text from a real scan?"
+  say "                    with no path it picks real scans from the archive itself"
+  say "  bench [DIR] [N]   seconds/file + PEAK RSS over N real files"
+  say "                    with no directory it samples the archive; 'bench 20' also works"
   say "  pst SRC           point it at a mailbox, guarded by a memory floor + timeout"
   say "  --netns           run inside an empty network namespace (sudo; recommended for family data)"
   say ""
