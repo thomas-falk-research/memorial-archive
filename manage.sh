@@ -124,8 +124,13 @@ refresh_installed() {
     if [[ "$mode" == "--repair" ]]; then
       v="$(sudo sed -n 's#.*paperless-ngx:##p' /srv/apps/paperless/docker-compose.override.yml 2>/dev/null | head -1)"
       [[ -n "$v" ]] && export PAPERLESS_VERSION="$v"
+      run archive-paperless-setup.sh --yes
+    else
+      # --update advances patch/minor releases. It deliberately does NOT pass --upgrade-major: a
+      # Paperless v2 -> v3 jump is a one-way migration that can leave the app on an empty database,
+      # so it must be a decision you make on purpose, not something the Update menu does for you.
+      run archive-paperless-setup.sh --yes --upgrade
     fi
-    run archive-paperless-setup.sh --yes
     unset PAPERLESS_VERSION
   fi
   if inst_copyparty; then

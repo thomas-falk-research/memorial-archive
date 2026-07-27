@@ -437,4 +437,9 @@ ${notes_dns}
         tailnet DNS, and these same names work remotely (no changes here).
       - Edit the portal look any time: ${PORTAL_DIR}/index.html  (then it's served as-is).
 EOF
-[[ -n "${GEN_SEARCH_PW:-}" ]] && warn "Generated search password: ${GEN_SEARCH_PW} (save it now)."
+# NOT a trailing `[[ ... ]] && warn` — as the last command of the script that makes a successful
+# run WITHOUT a generated password exit 1, which reads as a failure to every caller.
+if [[ -n "${GEN_SEARCH_PW:-}" ]]; then
+  warn "Generated search password: ${GEN_SEARCH_PW} (save it now)."
+fi
+exit 0
