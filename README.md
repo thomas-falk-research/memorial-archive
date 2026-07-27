@@ -66,7 +66,7 @@ Everything is config-driven, so it adapts to other disks, paths, networks, and d
 | 8 | `archive-apps-setup.sh` | *(optional, Docker)* **Manage every app from one command** (`archive-apps`): status · update/pull · logs · restart, across Immich/Paperless/copyparty/etc. Each app keeps its **own** Compose project (data volumes are never renamed); also creates a shared `memorial` network. | regular user w/ sudo |
 | 9 | `archive-webui-setup.sh` | Let the family **keyword-search** the archive from a phone browser — the recoll web UI behind a password-protected Caddy proxy on the local network. | regular user w/ sudo |
 | 10 | `archive-immich-setup.sh` | *(optional, Docker)* Self-hosted **photos & videos** (Immich) with native iPhone/iPad apps; indexes the archive's photos **read-only, in place** (no copy). Serves on `:2283`. | regular user w/ sudo |
-| 11 | `archive-paperless-setup.sh` | *(optional, Docker)* **Document manager** (Paperless-ngx): OCRs, tags, and searches documents you drop into its `consume/` folder. Serves on `:8000`. | regular user w/ sudo |
+| 11 | `archive-paperless-setup.sh` | *(optional, Docker)* **Document manager** (Paperless-ngx): OCRs, tags, and searches documents you drop into its `consume/` folder. Serves on `:8000`. **Version-pinned:** a re-run keeps the deployed tag; crossing a major version (the one-way v2→v3 migration) needs `--upgrade-major` **and** an export. See [`docs/PAPERLESS-DOCUMENT-VIEW.md`](docs/PAPERLESS-DOCUMENT-VIEW.md). | regular user w/ sudo |
 | 12 | `archive-copyparty-setup.sh` | *(optional, Docker)* **Read-only web file browser** (copyparty): browse and download *any* file in the archive from a phone/computer browser — no app, no SMB setup. Archive bind-mounted **read-only**; listens on loopback only (publish it via the front door). | regular user w/ sudo |
 | 13 | `archive-czkawka-setup.sh` | *(optional, Docker)* **Find duplicates** (czkawka, GUI in the browser): spot duplicate and visually-similar files across the archive even when they're named/timestamped differently. Archive mounted **read-only** (it finds, it can never delete); an admin tool, behind the front-door password at `dupes.<domain>`. | regular user w/ sudo |
 | 14 | `archive-stirling-setup.sh` | *(optional, Docker)* **PDF tools** (Stirling-PDF): a self-hosted web app to merge, split, OCR, convert, compress and sign PDFs — on the box, nothing uploaded to the internet. No archive access (you upload files in the browser). Front-door tile at `pdf.<domain>`. | regular user w/ sudo |
@@ -122,6 +122,11 @@ it never slows a login). It's a heads-up; the full picture is always `./archive-
 ---
 
 ## Day-to-day: gathering files
+
+> **Organising documents for the family?** [`docs/PAPERLESS-DOCUMENT-VIEW.md`](docs/PAPERLESS-DOCUMENT-VIEW.md)
+> is the design note for the curated Paperless "Documents view" — which documents to feed it, how to feed
+> **copies** (Paperless deletes what it consumes), and the version-upgrade hazard to avoid. Tooling in
+> [`paperless/`](paperless/).
 
 > **New to this?** [`docs/OPERATOR-RUNBOOK.md`](docs/OPERATOR-RUNBOOK.md) is a plain-English,
 > step-by-step walkthrough for a non-technical operator gathering a loved one's files end to end —
