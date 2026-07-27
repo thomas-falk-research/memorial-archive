@@ -107,10 +107,16 @@ This is where the honest reservations live.
 3. **The GitHub README says MIT; the PyPI `xberg` alias package says Elastic-2.0.** The v4 LTS repo is
    explicitly MIT. This is most likely stale metadata on a placeholder package, but **the licence must be
    confirmed from the actual artifact we install**, not from a README.
-4. **Kreuzberg v4 LTS is the conservative alternative** — MIT, stable — but it receives only critical bug
-   and security fixes **until the end of 2026, best-effort**. That is ~5 months of support for a project
-   whose entire premise here is long-run value. It is not obviously the safer choice; it is a different
-   risk.
+4. **`pip install xberg` does not install xberg.** Its only *stable* PyPI release is the **0.1.0
+   placeholder alias**; the real code ships as `1.0.0rc8…rc42` pre-releases, which **pip ignores unless
+   you pass `--pre`**. Installing the bare name yields a package that imports but extracts nothing — and
+   would sail through a naive egress test by doing nothing at all, twice. The verification script pins a
+   version, adds `--pre` automatically for release-candidate pins, and **refuses to certify a package
+   with no extraction entry point**.
+5. **Kreuzberg v4 is not as legacy as its "LTS" label suggests.** Despite being described as superseded,
+   **4.10.0, 4.10.1 and 4.10.2 all shipped on 11–12 July 2026** — two weeks ago. It is MIT, publishes a
+   `manylinux_2_28_x86_64` wheel, and has a `tesseract` extra for the local OCR backend. That makes the
+   "conservative" option a genuinely current one rather than a compromise.
 
 **How much does this churn actually matter?** Less than it would anywhere else in this archive, and it is
 worth being precise about why:
@@ -128,9 +134,15 @@ So the maturity risk is real but bounded, and it argues for one design rule rath
 > implementation beside the Docling one, and the choice of engine becomes a one-line change instead of a
 > commitment.
 
-**Recommendation:** pin **xberg 1.0.0** (final, if it lands within days — otherwise the newest rc), record
-the exact pin, and keep the Docling path in the tree as a fallback until the pilot has produced numbers.
-Do **not** float the version — same discipline as every other pin in this repo.
+**Recommendation (revised after checking PyPI):** start on **`kreuzberg[tesseract]==4.10.2`** — canonical
+package, MIT, current, real wheel, local OCR — and move to **xberg 1.0.0** once it goes final. This gets
+measurements this week on a stable artifact instead of waiting on a release candidate, and because the
+extractor is a swappable stage the move costs one line later. Record the exact pin; do **not** float the
+version — same discipline as every other pin in this repo.
+
+*Note on capability while pinned to v4:* the mailbox/recursive-archive reach described in §3 is
+advertised for the **xberg (v5) line**. Confirm which of PST/MSG/EML the pinned v4 build actually handles
+before Phase 2 depends on it — if the answer is "not PST", that alone is the argument for taking the rc.
 
 ---
 
@@ -213,8 +225,11 @@ database. That hazard is independent of whether we ever feed it another document
 - xberg README (xberg-io/xberg) — Rust engine, 98 formats incl. PST/MSG/EML and ZIP/TAR/7Z recursive
   extraction, TIFF/JBIG2/HEIC, OCR backends (Tesseract native FFI, PaddleOCR ONNX, Candle, opt-in VLM),
   local ONNX embeddings, CLI/REST/MCP/Docker, 15 language bindings; 8.7k stars, 7,679 commits, 7 open issues
-- PyPI `xberg` — 1.0.0rc8 … rc42 published 5–27 July 2026; alias for the canonical `kreuzberg` package;
-  metadata declares Elastic-2.0 (**conflicts with the README's MIT — verify at install**)
+- PyPI `xberg` — only stable release is **0.1.0** (a placeholder alias); real code published as
+  1.0.0rc8 … rc42, 5–27 July 2026, i.e. **pre-releases pip skips by default**; metadata declares
+  Elastic-2.0 (**conflicts with the README's MIT — verify at install**)
+- PyPI `kreuzberg` — latest stable **4.10.2 (12 July 2026)**, MIT, `manylinux_2_28_x86_64` wheel,
+  extras `tesseract` / `easyocr` / `all`; a 5.0.0rc3 also exists
 - kreuzberg-dev/kreuzberg-lts — "Kreuzberg v4 LTS … legacy; superseded by xberg for v5+. MIT-licensed";
   critical fixes to end of 2026, best-effort
 - docs.kreuzberg.dev `/guides/ocr/` — Tesseract is the default backend and runs fully locally; PaddleOCR

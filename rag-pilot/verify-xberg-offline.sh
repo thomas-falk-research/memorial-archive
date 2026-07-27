@@ -29,9 +29,16 @@ set -uo pipefail
 RAG_HOME="${RAG_HOME:-/home/$(id -un)/rag-pilot}"
 VERIFY_HOME="${VERIFY_HOME:-$RAG_HOME/xberg-verify}"
 ARCHIVE_ROOT="${ARCHIVE_ROOT:-/srv/archive}"
-# Pin explicitly — never float. The assessment recommends xberg 1.0.0 final once it lands; until then the
-# newest release candidate. Override with XBERG_PIN. 'kreuzberg' (v4 LTS, MIT) is the conservative pin.
-XBERG_PIN="${XBERG_PIN:-xberg}"
+# Pin explicitly — never float. DEFAULT IS THE CANONICAL, STABLE, MIT-LICENSED PACKAGE.
+#
+# TRAP (learned the hard way): `pip install xberg` does NOT get you xberg. Its only *stable* release on
+# PyPI is 0.1.0, a placeholder alias; the real code ships as 1.0.0rcN pre-releases, which pip ignores
+# unless you pass --pre. Installing the bare name yields a stub that would make this whole verification
+# meaningless — it would "pass" without ever extracting anything. So: pin a version, always.
+#
+#   kreuzberg[tesseract]==4.10.2   canonical, MIT, manylinux wheel, local OCR  <- default
+#   xberg==1.0.0rc42               the v5 line (pre-release; --pre is added automatically below)
+XBERG_PIN="${XBERG_PIN:-kreuzberg[tesseract]==4.10.2}"
 
 VENV="$VERIFY_HOME/venv"; PY="$VENV/bin/python"; PIP="$VENV/bin/pip"
 DOCS="$VERIFY_HOME/docs"; OUT_NET="$VERIFY_HOME/out-network"; OUT_OFF="$VERIFY_HOME/out-offline"
@@ -119,7 +126,11 @@ if [ -x "$VENV/bin/xberg" ] || [ -x "$PY" ]; then
 else
   python3 -m venv "$VENV" >>"$LOGS/install.log" 2>&1 || die "could not create the venv (need python3-venv?)"
   "$PIP" install --upgrade pip >>"$LOGS/install.log" 2>&1
-  "$PIP" install "$XBERG_PIN" >>"$LOGS/install.log" 2>&1 \
+  # A pre-release pin (…rcN / …aN / …bN) needs --pre, or pip silently resolves to an older stable.
+  pre=""
+  case "$XBERG_PIN" in *rc[0-9]*|*a[0-9]*|*b[0-9]*) pre="--pre"; say "  (pre-release pin — adding --pre)";; esac
+  # shellcheck disable=SC2086  # $pre is deliberately word-split: it is either empty or exactly --pre
+  "$PIP" install $pre "$XBERG_PIN" >>"$LOGS/install.log" 2>&1 \
     || die "pip install '$XBERG_PIN' failed — see $LOGS/install.log"
   ok "installed"
 fi
@@ -162,6 +173,35 @@ if   [ -x "$VENV/bin/xberg" ];     then RUNNER="cli:$VENV/bin/xberg"
 elif [ -x "$VENV/bin/kreuzberg" ]; then RUNNER="cli:$VENV/bin/kreuzberg"
 else RUNNER="py"; fi
 say ""; ok "extraction entry point: $RUNNER"
+
+# STUB GUARD — refuse to certify a placeholder. `pip install xberg` resolves to the 0.1.0 alias package
+# (see the pin comment at the top), which imports but extracts nothing. Without this check the two passes
+# would trivially agree — both producing nothing — and the script would report a clean bill of health for
+# a library it never actually exercised. A verification that can pass without doing the work is worse than
+# no verification, so prove an extraction entry point EXISTS before running the passes.
+cat >"$VERIFY_HOME/check_api.py" <<'PYEOF'
+import sys
+try:
+    import xberg as X
+except ImportError:
+    try:
+        import kreuzberg as X
+    except ImportError:
+        sys.exit("neither xberg nor kreuzberg is importable")
+if not any(callable(getattr(X, n, None)) for n in
+           ("extract_file_sync", "extract_file", "extract_sync", "extract")):
+    sys.exit(f"{X.__name__} imports but exposes no extract* function (placeholder package?)")
+print(f"  extraction API confirmed in {X.__name__}")
+PYEOF
+if [ -x "$PY" ]; then
+  if ! "$PY" "$VERIFY_HOME/check_api.py"; then
+    err "The installed package exposes NO extraction entry point — that is the placeholder alias,"
+    err "not the real library. Nothing has been certified. Re-run with an explicit version:"
+    err "    XBERG_PIN='kreuzberg[tesseract]==4.10.2' bash ${0##*/} teardown --go"
+    err "    XBERG_PIN='kreuzberg[tesseract]==4.10.2' bash ${0##*/} --go"
+    exit 2
+  fi
+fi
 
 cat >"$VERIFY_HOME/extract_all.py" <<'PYEOF'
 """extract_all.py OUTDIR DOC...  — extract each doc, write <name>.txt. Local backends only."""
