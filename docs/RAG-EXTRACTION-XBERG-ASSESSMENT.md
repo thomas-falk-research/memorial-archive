@@ -188,8 +188,19 @@ artifacts (onnxruntime carries platform tracing hooks it never activates on Linu
 produces a scary warning that means nothing), and reports any environment variable that could enable a
 remote backend. Only after a clean verdict does anything real get parsed.
 
-**Result on archive-pc (2026-07-27):** installed licence confirmed **MIT** for `kreuzberg 4.10.2`,
-settling §4.3 — the Elastic-2.0 metadata belongs to the placeholder alias package, not the real library.
+**Result on archive-pc (2026-07-27): PROVEN**, via method B — extraction is byte-identical with the
+network removed, so the extractor requires no outbound connection at runtime. Installed licence
+confirmed **MIT** for `kreuzberg 4.10.2`, settling §4.3: the Elastic-2.0 metadata belongs to the
+placeholder alias package, not the real library. **Family documents may now go through this extractor.**
+
+One scope limit on that verdict, stated so it is not over-read: the gate exercised text/eml/csv/pdf. The
+**OCR path was not exercised**, because it needs a real scan — that is the first thing
+`probe-extractor-capability.sh ocr` does, and a `--netns` option carries the same prevention over to
+every real-data run as free insurance.
+
+**And the verdict does not transfer.** It certifies `kreuzberg==4.10.2` and nothing else. If we take the
+xberg v5 release candidate for native PST (§4), the egress gate must be re-run against that build first —
+a different package is a different set of network behaviours.
 
 ---
 
