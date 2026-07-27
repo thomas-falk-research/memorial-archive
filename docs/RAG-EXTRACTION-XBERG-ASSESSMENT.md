@@ -226,6 +226,13 @@ cold-load latency, and Milvus Lite's real footprint.
 
 ## 7. Revised phased plan
 
+> **Phase-2 route decided (2026-07-27).** Upstream v4 docs confirm a **dedicated email extractor for
+> EML and MSG**; PST/OST/mbox are not listed for v4 and belong to the xberg v5 line. Since **MKH's PST is
+> already extracted to `.derived`**, the mailbox phase runs on the pinned, MIT, egress-PROVEN v4.10.2 by
+> feeding the extracted mail — same messages, same attachments, **no release-candidate dependency and no
+> second security gate**. Native PST would only save re-walking a tree we have already walked. Revisit
+> only if the extracted-mail route turns out to be lossy.
+
 | Phase | What | Gate |
 |---|---|---|
 | **0** | **Egress/telemetry verification** on synthetic data, network-namespace test (§5) | ← **do this first, always** |

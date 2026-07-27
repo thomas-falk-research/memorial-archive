@@ -34,7 +34,7 @@ RAG_HOME="${RAG_HOME:-/home/$(id -un)/rag-pilot}"
 VERIFY_HOME="${VERIFY_HOME:-$RAG_HOME/xberg-verify}"
 ARCHIVE_ROOT="${ARCHIVE_ROOT:-/srv/archive}"
 OUT="$VERIFY_HOME/capability"
-VENV="$VERIFY_HOME/venv"; PY="$VENV/bin/python"; CLI="$VENV/bin/kreuzberg"
+VENV="$VERIFY_HOME/venv"; PY="$VENV/bin/python"
 DOC_TIMEOUT="${DOC_TIMEOUT:-300}"        # OS-level wall-clock kill per file
 PST_TIMEOUT="${PST_TIMEOUT:-1800}"       # a 1.67 GB mailbox gets longer
 MIN_FREE_MIB="${MIN_FREE_MIB:-3072}"     # refuse to start below this MemAvailable
@@ -135,43 +135,160 @@ jget(){ "$PY" -c 'import json,sys;print(json.load(open(sys.argv[1])).get(sys.arg
 case "$cmd" in
 # ------------------------------------------------------------------------------------------------
 formats)
-  hdr "Supported formats — does this build read mailboxes?"
-  if [ -x "$CLI" ]; then
-    wrap "$CLI" formats >"$OUT/formats.txt" 2>&1 || warn "'kreuzberg formats' returned non-zero"
-    say "  (full list: $OUT/formats.txt — $(wc -l <"$OUT/formats.txt") lines)"
+  hdr "Format support — tested EMPIRICALLY, not taken on trust"
+  # An earlier version of this probe ran `kreuzberg formats`, and when that command did not exist it
+  # rendered a confident table of dashes from an empty file and concluded "PST is NOT supported" —
+  # a false negative on every row. A probe that manufactures answers is worse than one that errors.
+  # So: generate a real sample of each format, try to extract it, and report what actually happened.
+  # Three states, and "unknown" is a real state:
+  #     YES      extraction ran without an unsupported-format error
+  #     NO       the library rejected the format (error quoted)
+  #     UNKNOWN  we could not synthesise a sample — say so, never imply "no"
+  cat >"$OUT/probe_formats.py" <<'PYEOF'
+import io, json, os, struct, sys, tempfile, zipfile
+try:
+    import xberg as X
+except ImportError:
+    import kreuzberg as X
+fn = next((getattr(X, n) for n in ("extract_file_sync", "extract_file", "extract_sync", "extract")
+           if callable(getattr(X, n, None))), None)
+if fn is None:
+    sys.exit("no extraction entry point")
+
+def minimal_tiff():
+    """1x1 8-bit greyscale, uncompressed — enough to exercise the image/OCR route."""
+    tags = [(256, 3, 1, 1), (257, 3, 1, 1), (258, 3, 1, 8), (259, 3, 1, 1),
+            (262, 3, 1, 1), (273, 4, 1, 8 + 2 + 12 * 8 + 4), (278, 3, 1, 1), (279, 4, 1, 1)]
+    out = io.BytesIO()
+    out.write(b"II" + struct.pack("<HI", 42, 8))
+    out.write(struct.pack("<H", len(tags)))
+    for tag, typ, cnt, val in tags:
+        out.write(struct.pack("<HHI", tag, typ, cnt))
+        out.write(struct.pack("<HH", val, 0) if typ == 3 else struct.pack("<I", val))
+    out.write(struct.pack("<I", 0))
+    out.write(b"\xff")
+    return out.getvalue()
+
+def minimal_docx():
+    b = io.BytesIO()
+    with zipfile.ZipFile(b, "w") as z:
+        z.writestr("[Content_Types].xml",
+            '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" '
+            'ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override '
+            'PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.'
+            'wordprocessingml.document.main+xml"/></Types>')
+        z.writestr("_rels/.rels",
+            '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/'
+            'relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/'
+            '2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>')
+        z.writestr("word/document.xml",
+            '<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/'
+            '2006/main"><w:body><w:p><w:r><w:t>SYNTHETICDOCXPAYLOAD</w:t></w:r></w:p></w:body></w:document>')
+    return b.getvalue()
+
+def minimal_zip():
+    b = io.BytesIO()
+    with zipfile.ZipFile(b, "w") as z:
+        z.writestr("inner.txt", "SYNTHETICZIPPAYLOAD")
+    return b.getvalue()
+
+EML = (b"From: a@example.invalid\r\nTo: b@example.invalid\r\nSubject: Synthetic\r\n"
+       b"MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"B\"\r\n\r\n--B\r\n"
+       b"Content-Type: text/plain\r\n\r\nSYNTHETICEMLBODY\r\n--B\r\n"
+       b"Content-Type: text/plain; name=\"att.txt\"\r\n"
+       b"Content-Disposition: attachment; filename=\"att.txt\"\r\n\r\n"
+       b"SYNTHETICATTACHMENT\r\n--B--\r\n")
+
+PDF = (b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
+       b"2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n"
+       b"3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]/Contents 4 0 R"
+       b"/Resources<</Font<</F1 5 0 R>>>>>>endobj\n"
+       b"4 0 obj<</Length 62>>stream\nBT /F1 12 Tf 20 100 Td (SYNTHETICPDFPAYLOAD) Tj ET\n"
+       b"endstream endobj\n5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\n"
+       b"trailer<</Root 1 0 R>>\n")
+
+SAMPLES = {
+    "txt":  b"SYNTHETICTXTPAYLOAD\n",
+    "csv":  b"a,b\n1,SYNTHETICCSVPAYLOAD\n",
+    "html": b"<html><body>SYNTHETICHTMLPAYLOAD</body></html>",
+    "eml":  EML,
+    "pdf":  PDF,
+    "tiff": minimal_tiff(),
+    "docx": minimal_docx(),
+    "zip":  minimal_zip(),
+}
+# Cannot be synthesised meaningfully: .msg is an OLE compound file, .pst/.ost are whole mailbox
+# databases. Reported as UNKNOWN rather than guessed — `pst <real file>` is the honest test.
+UNSYNTHESISABLE = ["msg", "pst", "ost", "mbox"]
+
+results = {}
+tmp = tempfile.mkdtemp()
+for ext, data in SAMPLES.items():
+    path = os.path.join(tmp, f"sample.{ext}")
+    with open(path, "wb") as f:
+        f.write(data)
+    try:
+        res = fn(path)
+        if hasattr(res, "__await__"):
+            import asyncio; res = asyncio.run(res)
+        text = getattr(res, "content", None) or getattr(res, "text", None) or ""
+        # Success WITHOUT an unsupported-format error means the format is handled, even if a 1x1
+        # blank image yields no words. Text presence is reported separately.
+        results[ext] = {"state": "YES", "chars": len(text), "text_found": bool(text.strip())}
+    except Exception as e:
+        msg = f"{type(e).__name__}: {e}"
+        unsupported = any(k in msg.lower() for k in
+                          ("unsupported", "not supported", "mime", "unknown format", "no extractor"))
+        results[ext] = {"state": "NO" if unsupported else "ERROR", "error": msg[:200]}
+    finally:
+        try: os.unlink(path)
+        except OSError: pass
+for ext in UNSYNTHESISABLE:
+    results[ext] = {"state": "UNKNOWN", "why": "cannot synthesise a valid sample"}
+print(json.dumps(results, indent=1))
+PYEOF
+  "$PY" "$OUT/probe_formats.py" >"$OUT/formats.json" 2>"$OUT/formats.err" || {
+    err "format probing failed:"; tail -10 "$OUT/formats.err" | sed 's/^/    /'; exit 1; }
+
+  say ""
+  printf '  %-8s %-9s %s\n' FORMAT STATE DETAIL
+  "$PY" - "$OUT/formats.json" <<'PYEOF'
+import json, sys
+r = json.load(open(sys.argv[1]))
+G, Y, R, Z = "\033[1;32m", "\033[1;33m", "\033[1;31m", "\033[0m"
+for ext in ("txt", "csv", "html", "pdf", "eml", "tiff", "docx", "zip", "msg", "pst", "ost", "mbox"):
+    d = r.get(ext, {})
+    st = d.get("state", "UNKNOWN")
+    col = {"YES": G, "NO": R, "ERROR": R, "UNKNOWN": Y}[st]
+    if st == "YES":
+        detail = f"{d['chars']} chars" + ("" if d["text_found"] else "  (no text — blank sample)")
+    elif st == "UNKNOWN":
+        detail = d.get("why", "")
+    else:
+        detail = d.get("error", "")
+    print(f"  {ext:<8} {col}{st:<9}{Z} {detail}")
+PYEOF
+
+  hdr "PHASE-2 DECISION"
+  eml_state="$("$PY" -c 'import json,sys;print(json.load(open(sys.argv[1]))["eml"]["state"])' "$OUT/formats.json" 2>/dev/null)"
+  if [ "$eml_state" = YES ]; then
+    ok "EML extraction works on this pinned, MIT, stable build."
+    say "  That settles the mailbox route WITHOUT taking the v5 release candidate:"
+    say "  MKH's PST is ALREADY extracted to .derived, so we feed the extracted mail — same"
+    say "  messages, same attachments, no new package and no second egress gate."
+    say ""
+    say "  Native PST (v5) would only save re-walking a tree we have already walked. Not worth"
+    say "  a release-candidate dependency and a fresh security verification for the will hunt."
   else
-    warn "no CLI in the venv; cannot list formats"; : >"$OUT/formats.txt"
+    warn "EML did NOT extract cleanly — that is the format the mailbox route depends on."
+    say "  Check the detail above before choosing a route; do not assume the v5 rc is the answer"
+    say "  until this is understood, because it may be an install problem rather than a format gap."
   fi
   say ""
-  printf '  %-14s %s\n' FORMAT SUPPORTED
-  verdict_pst="no"
-  for f in pst ost msg eml mbox tif tiff jbig2 pdf docx xlsx zip; do
-    if grep -qiw -- "$f" "$OUT/formats.txt" 2>/dev/null; then
-      printf '  %-14s %sYES%s\n' "$f" "$c_g" "$c_0"
-      [ "$f" = pst ] && verdict_pst="yes"
-    else
-      printf '  %-14s %s—%s\n' "$f" "$c_y" "$c_0"
-    fi
-  done
-  hdr "PHASE-2 DECISION"
-  if [ "$verdict_pst" = yes ]; then
-    ok "This build reads PST — the mailbox phase can run on the pinned, MIT, stable v4.10.2."
-    say "  No need to take the xberg v5 release candidate for the will hunt."
-  else
-    warn "PST is NOT listed for this build."
-    say "  The mailbox traversal (the reason this swap matters) needs the xberg v5 line:"
-    say "      XBERG_PIN='xberg==1.0.0rc42' bash verify-xberg-offline.sh teardown --go"
-    say "      XBERG_PIN='xberg==1.0.0rc42' bash verify-xberg-offline.sh --go --sudo-netns"
-    say "  Re-run the egress gate on that build BEFORE any family data touches it — a different"
-    say "  package is a different set of network behaviours, and the last verdict does not carry over."
-    say ""
-    say "  Note: our PST is ALREADY extracted to .derived, so EML/MSG support alone may be enough."
-    if grep -qiw -- 'eml\|msg' "$OUT/formats.txt" 2>/dev/null; then
-      ok "  eml/msg ARE supported here — the extracted-mail route works on v4 today."
-    else
-      warn "  eml/msg not listed either — check $OUT/formats.txt by hand."
-    fi
-  fi
+  say "  Documented position (upstream docs, v4): EML and MSG are supported by a dedicated email"
+  say "  extractor; PST/OST/mbox are not listed for v4 and appear on the xberg v5 line."
+  say "  Raw results: $OUT/formats.json"
   ;;
 # ------------------------------------------------------------------------------------------------
 ocr)
