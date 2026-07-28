@@ -267,17 +267,27 @@ OVR
   fi
   ok "the outside world is now UNREACHABLE from the stack's network (raw IP and DNS both fail)"
 
+  # Check the app FROM INSIDE the network, not from the host.
+  #
+  # `internal: true` does not only remove the gateway — it also stops Docker publishing ports to the
+  # host. So a host-side curl returning 000 after the cut is the EXPECTED consequence of the method,
+  # not evidence the app died. Testing from a sibling container on the same network separates the two
+  # questions: the app is still addressable there, while egress is genuinely gone.
+  say "  (the published port is intentionally unreachable from the host under internal:true —"
+  say "   checking the app from a sibling container on the same network instead)"
   sleep 5   # let the app finish restarting after the recreate
-  local after i=0
+  local status="" i=0
   while [ "$i" -lt 12 ]; do
-    after="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://127.0.0.1:$PORT/" 2>/dev/null)"
-    case "$after" in 2*|3*|401|403) break ;; esac
+    status="$(sudo docker run --rm --network "$net" "$probe_img" sh -c \
+      'wget -T 5 -S -q -O /dev/null http://openarchiver-app:3000/ 2>&1 | grep -m1 -oE "HTTP/1\.[01] [0-9]{3}"' 2>/dev/null | awk '{print $2}')"
+    case "$status" in 2*|3*|401|403) break ;; esac
     i=$((i+1)); sleep 5
   done
-  case "$after" in
-    2*|3*|401|403) ok "the app still serves with egress genuinely cut (HTTP $after)" ;;
-    *) bad "the app stopped working once egress was really cut (HTTP ${after:-none})"
+  case "$status" in
+    2*|3*|401|403) ok "the app still serves with egress genuinely cut (HTTP $status, from inside the network)" ;;
+    *) bad "the app stopped answering once egress was really cut (got '${status:-no response}')"
        bad "  A mail archive that needs outbound access has not earned this family's correspondence."
+       bad "  Check what it was reaching for:  sudo docker compose logs --tail=50 open-archiver"
        fails=$((fails+1)) ;;
   esac
 

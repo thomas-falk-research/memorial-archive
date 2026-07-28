@@ -260,6 +260,20 @@ Tested three ways: a real cut with a surviving app (PASS), a cut that silently f
 original bug — (FAIL, refuses to certify), and an app that dies without egress (FAIL). The override is
 cleaned up in every case.
 
+### Second correction to the same gate, from the first real run
+
+On the box, gate 3 proved the cut (raw IP and DNS both unreachable from inside) and then reported the
+app dead — a **false failure caused by the test method**. `internal: true` does not only remove the
+network's gateway; it also stops Docker publishing the container's port to the host. So a host-side
+`curl` returning `000` after the cut is the *expected consequence of cutting*, not evidence that the
+app broke. The gate was conflating "the app died" with "the host can no longer reach a port that is
+deliberately no longer published".
+
+Fixed by asking the right observer: the app is now probed **from a sibling container on the same
+network**, where it is still addressable while egress is genuinely gone. Both questions stay separate,
+and the check keeps its teeth — verified against a stub where the app is genuinely dead in-network
+(still FAILS) and one where it is healthy while the host port is unreachable (now PASSES).
+
 The synthetic mailbox was validated by parsing it back with Python's `mailbox` module: two messages, the
 attachment byte-identical to the fixture, and — critically — **the token `OCRWILLMARKER` appears nowhere
 in the file's plaintext**. A search hit for it can therefore only have come from OCR. That is what makes
