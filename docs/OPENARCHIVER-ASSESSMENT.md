@@ -130,11 +130,54 @@ the same line that made the Paperless *ingest* unacceptable to take on right now
 4. **Does the stack function with egress blocked** (§4.2)?
 5. **Is Tika actually required** for our path, or only for attachment extraction we could skip? Dropping
    a JVM would materially change the footprint. **[unmeasured]**
-6. **Does search expose the facets that matter** — from/to, date range, has-attachment — or only
-   full-text? The entire value case in §1 depends on this. Check on the public demo before installing.
+6. ~~**Does search expose the facets that matter**~~ — **ANSWERED, see §6a.** Yes, all of them, plus one
+   we did not ask for.
 
-Question 6 is cheap and decisive: **it can be answered on `demo.openarchiver.com` in ten minutes, with no
-install and no data.** That should happen first.
+---
+
+## 6a. Q6 ANSWERED from the source — the facets exist, and one is better than hoped
+
+Answered from `docs/user-guides/searching.md` and the code tree rather than by clicking the public demo.
+The documentation specifies the search **API**, which is decisive where a demo UI is only suggestive —
+and it costs nobody ten minutes of clicking.
+
+| Facet we needed | Present |
+|---|---|
+| From (sender) | ✅ plus **exclude sender** |
+| To / Cc / Bcc | ✅ plus **exclude recipient**, and per-mailbox filtering |
+| Date range | ✅ inclusive bounds, interpreted UTC |
+| Has attachment | ✅ with **or without** |
+| Ingestion source | ✅ limit or exclude |
+| Sort | ✅ newest / oldest / relevance |
+
+**The facet we did not ask for, and the most valuable of the lot:** `searchIn` scopes matching to
+**Subject · Body · Attachment name · Attachment CONTENT · Sender · Recipients**. Attachment *content* is
+indexed and separately searchable — the text inside a faxed scan attached to an email is a first-class
+search target. That is the exact object of the hunt.
+
+It is a REST endpoint, so the hunt can be **scripted and reproducible** rather than clicked:
+
+```
+GET /v1/search?keywords=Ratliff&dateFrom=2009-01-01&dateTo=2009-12-31
+    &searchIn=attachment_name,attachment_content,subject,body
+```
+
+Filters combine with AND. The tree also carries a dedicated **`PSTConnector.ts`** alongside the
+EML/Mbox/IMAP/Google/Microsoft connectors — PST is a first-class path, not an afterthought.
+
+### The new dependency this exposes
+
+`attachment_content` is only as good as the attachment text extraction behind it — and **our estate
+attachments are scanned faxes, which are images**. Their text exists only if **Tika performs OCR**. That
+is presumably why the compose pins `tika:3.2.2.0-full` (the full image bundles OCR) rather than the
+minimal one.
+
+**So this becomes a deploy-time gate, not an assumption** — the same lesson as the extractor, where the
+egress verdict came back clean while OCR stayed unproven until it was tested on a real scan:
+
+> Import a synthetic mailbox containing **an image-only attachment with known text**, then search for a
+> word that appears *only inside that image*. If it does not come back, `attachment_content` is blind to
+> precisely the documents we are looking for, and the value case in §1 collapses to metadata filtering.
 
 ---
 
@@ -142,9 +185,9 @@ install and no data.** That should happen first.
 
 | Step | What | Gate |
 |---|---|---|
-| **0** | Answer Q6 on the public demo — do the mail facets exist? | ← start here, costs nothing |
+| ~~**0**~~ | ~~Answer Q6~~ — **DONE (§6a): every facet present, plus attachment-content search** | ✅ passed |
 | **1** | Write `archive-openarchiver-setup.sh` to repo convention: pinned images, loopback-bound, Caddy route, `MEILI_NO_ANALYTICS=true`, no cloud connectors, own volumes on the OS disk | Q6 says yes |
-| **2** | Stand it up and import a **synthetic** mailbox; run the egress test (§4.2); confirm the source file is untouched (checksum before == after) | — |
+| **2** | Stand it up and import a **synthetic** mailbox; run the egress test (§4.2); confirm the source file is untouched (checksum before == after); **and prove Tika OCRs an image-only attachment** (§6a) | — |
 | **3** | Import a **COPY** of `Outlook MKH.pst`; measure RAM and ingest time | §2 passes clean |
 | **4** | Run the actual hunt: Ratliff · "Northern Trust" · March 2009 · has-attachment · Hartigan Kenilworth · "December 5" | — |
 | **5** | Decide: does it stay resident, or was it a one-off instrument? | honest answer |
@@ -155,6 +198,12 @@ Steps 0–2 involve no family data at all. Step 3 is the first that does, and on
 
 ## 8. Sources
 
+- LogicLabs-OU/OpenArchiver `docs/user-guides/searching.md` — from/exclude-sender, to/Cc/Bcc, mailboxes,
+  inclusive UTC date range, with/without attachments, source include-exclude, sort, and **`searchIn`
+  scoping to subject · body · attachment_name · attachment_content · sender · recipients**; REST API
+- LogicLabs-OU/OpenArchiver source tree — `services/ingestion-connectors/PSTConnector.ts` (also EML,
+  Mbox, Imap, GoogleWorkspace, Microsoft); `services/SearchService.ts`, `IndexingService.ts`,
+  `helpers/meiliFilter.ts`
 - LogicLabs-OU/OpenArchiver README — purpose, ingestion sources (IMAP, Google Workspace, M365, **PST,
   Mbox, zipped .eml**), stack (PostgreSQL, Meilisearch, BullMQ/Redis-Valkey, S3 or local), Docker Compose
   deployment, **≥4 GB RAM** stated requirement
