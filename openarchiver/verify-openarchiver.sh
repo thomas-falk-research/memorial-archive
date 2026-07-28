@@ -196,61 +196,94 @@ gate_ocr(){
 
 # ------------------------------------------------------------------------------------------------
 gate_egress(){
-  hdr "GATE 3/4 — does the stack work with the internet cut off?"
-  local names
+  hdr "GATE 3/4 — does the stack work with the internet actually cut off?"
+  # WHY THIS IS NOT JUST `docker network disconnect`: every Docker BRIDGE network provides outbound
+  # NAT through the host. Detaching the containers from the shared 'memorial' bridge while keeping the
+  # project's own bridge (so the services can still reach each other) leaves egress fully intact — the
+  # first version of this gate did exactly that and would have reported PASS on an uncut stack.
+  #
+  # The real cut is `internal: true` on the project network, which removes its gateway. We apply it as
+  # a temporary compose override, prove from INSIDE the network that the outside is unreachable, then
+  # remove the override. A cut we cannot prove is not evidence, so failing to cut FAILS the gate.
+  local names probe_img="${OA_PG_IMAGE:-postgres:17-alpine}"
   names="$(sudo docker ps --format '{{.Names}}' 2>/dev/null | grep '^openarchiver-' || true)"
   [ -n "$names" ] || { bad "no openarchiver-* containers are running"; fails=$((fails+1)); return 1; }
   say "  containers: $(tr '\n' ' ' <<<"$names")"
 
-  # Prove the app answers BEFORE we cut anything, so a failure after is attributable.
   local before
   before="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://127.0.0.1:$PORT/" 2>/dev/null)"
-  say "  app responds on 127.0.0.1:$PORT -> HTTP ${before:-none}"
-  case "$before" in 2*|3*|401|403) ok "app is up before the cut" ;; *) bad "app is not responding; fix that first"; fails=$((fails+1)); return 1 ;; esac
+  case "$before" in
+    2*|3*|401|403) ok "app responds before the cut (HTTP $before)" ;;
+    *) bad "app is not responding (HTTP ${before:-none}) — fix that before testing egress"; fails=$((fails+1)); return 1 ;;
+  esac
 
-  # Disconnect every openarchiver container from any bridge that routes outward, keeping the
-  # project's internal network so the services can still reach each other. Reconnect in a trap so an
-  # interrupted run cannot leave the stack half-detached.
-  local nets_removed=""
+  local net override="$APP_DIR/docker-compose.egress-test.yml"
+  net="$(sudo docker inspect openarchiver-app --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' 2>/dev/null | tr ' ' '\n' | grep -E 'openarchiver|default' | head -1)"
+  [ -n "$net" ] || { bad "could not determine the project network"; fails=$((fails+1)); return 1; }
+  say "  project network: $net"
+
+  # egress_open <network> — 0 if the outside world is reachable from inside that network. Tests a raw
+  # IP as well as DNS, so a DNS-only failure cannot masquerade as a blocked network.
+  egress_open(){
+    sudo docker run --rm --network "$1" "$probe_img" sh -c \
+      'wget -T 4 -q -O /dev/null http://1.1.1.1/ 2>/dev/null && exit 0
+       getent hosts one.one.one.one >/dev/null 2>&1 && exit 0
+       exit 1' >/dev/null 2>&1
+  }
+
+  # Baseline: egress must be OPEN now, or the test proves nothing later.
+  if egress_open "$net"; then
+    say "  baseline: the outside world IS reachable from $net (as expected)"
+  else
+    warn "the outside world is ALREADY unreachable from $net — cannot demonstrate a change."
+    warn "That may be fine (restrictive host firewall), but this gate cannot prove anything. Treating as inconclusive."
+    fails=$((fails+1)); return 1
+  fi
+
   restore(){
-    local entry n c
-    for entry in $nets_removed; do
-      c="${entry%%|*}"; n="${entry##*|}"
-      sudo docker network connect "$n" "$c" >/dev/null 2>&1 || true
-    done
-    [ -n "$nets_removed" ] && say "  (reconnected the containers to their networks)"
+    sudo rm -f "$override" 2>/dev/null
+    ( cd "$APP_DIR" && sudo docker compose up -d >/dev/null 2>&1 )
+    say "  (restored the normal network configuration)"
   }
   trap 'restore' EXIT INT TERM
 
-  local c n
-  for c in $names; do
-    for n in $(sudo docker inspect "$c" --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' 2>/dev/null); do
-      case "$n" in
-        *default*|*openarchiver*) continue ;;   # keep the stack's own internal network
-      esac
-      if sudo docker network disconnect "$n" "$c" >/dev/null 2>&1; then
-        nets_removed="$nets_removed $c|$n"
-      fi
-    done
-  done
-  say "  detached from outward-facing networks:${nets_removed:- (none found — already internal)}"
-
-  # Verify from INSIDE a container that the outside world is genuinely unreachable.
-  if sudo docker exec openarchiver-app sh -c 'command -v getent >/dev/null && getent hosts pypi.org' >/dev/null 2>&1; then
-    warn "the app container can still resolve external names — the cut may be incomplete"
-  else
-    ok "external name resolution fails inside the container (egress cut)"
+  say "  applying a temporary override: network '$net' -> internal: true (containers will recreate)"
+  sudo tee "$override" >/dev/null <<'OVR'
+# TEMPORARY — written by verify-openarchiver.sh, removed when the gate finishes.
+networks:
+  default:
+    internal: true
+OVR
+  if ! ( cd "$APP_DIR" && sudo docker compose -f docker-compose.yml -f docker-compose.egress-test.yml up -d >/dev/null 2>&1 ); then
+    bad "could not apply the egress-test override"; fails=$((fails+1)); restore; trap - EXIT INT TERM; return 1
   fi
+  # The app also joins the shared 'memorial' bridge, which would keep egress alive on its own.
+  sudo docker network disconnect memorial openarchiver-app >/dev/null 2>&1 && say "  detached from the shared 'memorial' bridge too"
 
-  local after
-  after="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "http://127.0.0.1:$PORT/" 2>/dev/null)"
+  if egress_open "$net"; then
+    bad "EGRESS IS STILL OPEN after the cut — this gate cannot certify anything."
+    bad "  Do not treat the stack as verified offline. Investigate before importing mail."
+    fails=$((fails+1)); restore; trap - EXIT INT TERM; return 1
+  fi
+  ok "the outside world is now UNREACHABLE from the stack's network (raw IP and DNS both fail)"
+
+  sleep 5   # let the app finish restarting after the recreate
+  local after i=0
+  while [ "$i" -lt 12 ]; do
+    after="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://127.0.0.1:$PORT/" 2>/dev/null)"
+    case "$after" in 2*|3*|401|403) break ;; esac
+    i=$((i+1)); sleep 5
+  done
   case "$after" in
-    2*|3*|401|403) ok "the app still serves with egress cut (HTTP $after)" ;;
-    *) bad "the app stopped working once egress was cut (HTTP ${after:-none}) — investigate before trusting it with mail"; fails=$((fails+1)) ;;
+    2*|3*|401|403) ok "the app still serves with egress genuinely cut (HTTP $after)" ;;
+    *) bad "the app stopped working once egress was really cut (HTTP ${after:-none})"
+       bad "  A mail archive that needs outbound access has not earned this family's correspondence."
+       fails=$((fails+1)) ;;
   esac
+
   restore; trap - EXIT INT TERM
-  say "  NOTE: this proves the SERVING path. Re-run an import while detached to prove the INGEST path"
-  say "        too — that is the one that handles message content."
+  say "  NOTE: this proves the SERVING path. To prove INGEST too, re-run an import while the override"
+  say "        is applied — that is the path that handles message content."
 }
 
 # ------------------------------------------------------------------------------------------------

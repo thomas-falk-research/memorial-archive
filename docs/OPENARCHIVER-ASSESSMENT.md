@@ -235,12 +235,30 @@ Against stub `docker`/`sudo`/`git`, on scratch directories:
 |---|---|
 | `harden` | reads the **running** config, not the file we wrote: telemetry off, loopback-only, archive not mounted, import read-only, deletion off, no cloud credentials, no upstream default secrets |
 | `ocr` | **the deciding gate** — builds a synthetic mailbox whose only content of interest is the repo's committed image-only PDF, then looks for a token that exists *nowhere in plaintext* |
-| `egress` | detaches the containers from outward-facing networks and confirms the app still serves |
+| `egress` | applies `internal: true` to the project network, **proves from inside that the outside is unreachable**, then confirms the app still serves |
 | `source` | sha256 before == after, and the file still exists — upstream's behaviour toward its source is undocumented |
 
 Also tested in **both** directions: against a deliberately unsafe config (telemetry missing, port on
 `0.0.0.0`, archive mounted writable, import writable, cloud credentials, upstream default secrets) the
 harden gate catches **all six** and exits non-zero; and a tampered source file is caught by `source`.
+
+### A flaw found in my own egress gate, before it could certify anything
+
+The first version detached the containers from the shared `memorial` bridge while keeping the project's
+own bridge so the services could still talk to each other. **Every Docker bridge network provides
+outbound NAT**, so egress was never actually cut — the gate would have reported a clean offline result
+for a stack that still had full internet access. Caught on review of the deploy output, before it ran.
+
+The gate now applies `internal: true` to the project network (which removes its gateway), disconnects
+from `memorial` as well, and — the part that matters — **proves the cut from inside the network** with a
+throwaway probe container testing both a raw IP and DNS. If egress is still open, the gate **fails**
+rather than warning: a cut we cannot demonstrate is not evidence. It also refuses to proceed if the
+baseline shows egress was *already* closed, since then nothing has been demonstrated either way. The
+temporary override is removed by a trap, so an interrupted run cannot leave the stack detached.
+
+Tested three ways: a real cut with a surviving app (PASS), a cut that silently fails to take — the
+original bug — (FAIL, refuses to certify), and an app that dies without egress (FAIL). The override is
+cleaned up in every case.
 
 The synthetic mailbox was validated by parsing it back with Python's `mailbox` module: two messages, the
 attachment byte-identical to the fixture, and — critically — **the token `OCRWILLMARKER` appears nowhere
