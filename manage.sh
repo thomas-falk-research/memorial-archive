@@ -52,6 +52,7 @@ inst_copyparty() { [[ -d /srv/apps/copyparty ]]; }
 inst_czkawka()   { [[ -d /srv/apps/czkawka ]]; }
 inst_stirling()  { [[ -d /srv/apps/stirling ]]; }
 inst_docmost()   { [[ -d /srv/apps/docmost ]]; }
+inst_openarchiver() { [[ -d /srv/apps/openarchiver ]]; }
 inst_kopia()     { [[ -d /srv/apps/kopia ]]; }
 inst_apps()      { have_cmd archive-apps; }
 inst_proxy()     { grep -qs 'archive-proxy-setup.sh' /etc/caddy/Caddyfile; }
@@ -83,6 +84,7 @@ do_install() {
   if confirm "13) Duplicate finder (czkawka, read-only)?";         then run archive-czkawka-setup.sh; fi
   if confirm "14) PDF tools (Stirling-PDF)?";                      then run archive-stirling-setup.sh; fi
   if confirm "15) Notes & memories (Docmost, family-writable)?";   then run archive-docmost-setup.sh; fi
+  if confirm "15b) Mail archive (Open Archiver: PST/EML import, sender+date+attachment search)?"; then run archive-openarchiver-setup.sh; fi
   if confirm "16) One-URL front door (portal + friendly names)?";  then run archive-proxy-setup.sh; fi
   if confirm "17) Back up the family's Windows PCs onto the box (Kopia server)?"; then run archive-kopia-setup.sh; fi
   # One consolidated reminder of the secrets that CANNOT be reset, so they're not lost in the install
@@ -165,6 +167,11 @@ refresh_installed() {
     run archive-docmost-setup.sh --yes
     unset DOCMOST_VERSION
   fi
+  if inst_openarchiver; then
+    # Re-runs pin to the deployed tag by default; --update passes --upgrade to advance it.
+    if [[ "$mode" == "--repair" ]]; then run archive-openarchiver-setup.sh --yes
+    else run archive-openarchiver-setup.sh --yes --upgrade; fi
+  fi
   if inst_kopia; then
     if [[ "$mode" == "--repair" ]]; then
       v="$(sudo sed -n 's#.*kopia/kopia:##p' /srv/apps/kopia/docker-compose.yml 2>/dev/null | head -1)"
@@ -231,14 +238,14 @@ do_uninstall() {
   fi
 
   local app
-  for app in immich paperless copyparty czkawka stirling docmost kopia; do
+  for app in immich paperless copyparty czkawka stirling docmost openarchiver kopia; do
     if [[ -d "/srv/apps/$app" ]] && confirm "Stop & remove the ${app} containers (keeps its data)?"; then
       ( cd "/srv/apps/$app" && sudo docker compose down 2>/dev/null ) || warn "could not stop ${app} (already down?)"
       ok "Stopped the ${app} containers."
     fi
   done
 
-  for app in immich paperless copyparty czkawka stirling docmost kopia; do
+  for app in immich paperless copyparty czkawka stirling docmost openarchiver kopia; do
     if [[ -d "/srv/apps/$app" ]]; then
       warn "Removing /srv/apps/${app} deletes ${app}'s OWN data (its database/thumbnails or OCR'd library)."
       warn "Your ORIGINAL files in /srv/archive are not affected."

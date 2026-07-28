@@ -30,6 +30,7 @@ APPS=(
   "stirling|archive-stirling-setup.sh|stirlingtools/stirling-pdf|stripv"
   "docmost|archive-docmost-setup.sh|docmost/docmost|stripv"
   "kopia|archive-kopia-setup.sh|kopia/kopia|keepv"
+  "openarchiver|archive-openarchiver-setup.sh|logiclabshq/open-archiver|keepv"
 )
 
 fallback_of() { grep -E '^FALLBACK_VERSION="' "$1" | head -1 | sed -E 's/^FALLBACK_VERSION="([^"]*)".*/\1/'; }

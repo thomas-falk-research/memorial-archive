@@ -39,6 +39,8 @@ STIRLING_UPSTREAM="${STIRLING_UPSTREAM:-127.0.0.1:8082}"
 STIRLING_DIR="${STIRLING_DIR:-/srv/apps/stirling}"
 DOCMOST_UPSTREAM="${DOCMOST_UPSTREAM:-127.0.0.1:3000}"
 DOCMOST_DIR="${DOCMOST_DIR:-/srv/apps/docmost}"
+OPENARCHIVER_UPSTREAM="${OPENARCHIVER_UPSTREAM:-127.0.0.1:3010}"
+OPENARCHIVER_DIR="${OPENARCHIVER_DIR:-/srv/apps/openarchiver}"
 SEARCH_USER="${SEARCH_USER:-family}"
 
 # Dedicated LAN ports that re-expose the password-gated, loopback-only apps by raw IP — so they work
@@ -56,6 +58,7 @@ FILES_HOST="files.${BASE_DOMAIN}"
 DUPES_HOST="dupes.${BASE_DOMAIN}"
 PDF_HOST="pdf.${BASE_DOMAIN}"
 DOCMOST_HOST="docmost.${BASE_DOMAIN}"
+MAIL_HOST="mail.${BASE_DOMAIN}"
 PORTAL_HOST="archive.${BASE_DOMAIN}"
 
 # The Files browser (copyparty) is only routed/shown if it's installed — it serves anonymous-read on
@@ -73,6 +76,10 @@ stirling_installed=false
 # (like Immich/Paperless) WITHOUT the Caddy password, since it authenticates its own users.
 docmost_installed=false
 [[ -d "$DOCMOST_DIR" ]] && docmost_installed=true
+# Open Archiver has its OWN logins (like Immich/Docmost), so it is routed WITHOUT the Caddy password.
+# Name-only, no dedicated LAN port: its login cookies are bound to its *.home host.
+openarchiver_installed=false
+[[ -d "$OPENARCHIVER_DIR" ]] && openarchiver_installed=true
 
 ASSUME_YES=false
 RESET_SEARCH_PW="${RESET_SEARCH_PW:-}"
@@ -117,6 +124,7 @@ printf '    %-18s -> recoll search (%s, keeps its login)\n' "${SEARCH_HOST}" "$S
 [[ "$czkawka_installed" == true ]] && printf '    %-18s -> duplicate finder (%s, same login; admin tool, no portal tile)\n' "${DUPES_HOST}" "$CZKAWKA_UPSTREAM"
 [[ "$stirling_installed" == true ]] && printf '    %-18s -> PDF tools (%s, same login)\n' "${PDF_HOST}" "$STIRLING_UPSTREAM"
 [[ "$docmost_installed" == true ]] && printf '    %-18s -> notes/wiki (%s, its OWN login)\n' "${DOCMOST_HOST}" "$DOCMOST_UPSTREAM"
+[[ "$openarchiver_installed" == true ]] && printf '    %-18s -> mail archive (%s, its OWN login)\n' "${MAIL_HOST}" "$OPENARCHIVER_UPSTREAM"
 printf '    portal also answers on the IP (%s) and any unmatched name\n' "${lan_ip:-this host}"
 if [[ "${ASSUME_YES}" != "true" ]]; then
   read -rp $'\nProceed? [y/N] ' _ans
@@ -388,6 +396,19 @@ http://${DOCMOST_HOST} {
 }
 CADDY5
   info "Added the Notes route: ${DOCMOST_HOST} -> ${DOCMOST_UPSTREAM} (Docmost handles its own login)."
+fi
+
+# Append the Mail archive (Open Archiver) route only when installed. Like Immich/Paperless/Docmost it
+# has its OWN logins, so no Caddy password. Name-only (no dedicated LAN port): its ORIGIN/APP_URL is
+# bound to this host, and reaching it by raw IP:port breaks SvelteKit's origin check on form posts.
+if [[ "$openarchiver_installed" == true ]]; then
+  sudo tee -a "$CADDYFILE" >/dev/null <<CADDY6
+
+http://${MAIL_HOST} {
+	reverse_proxy ${OPENARCHIVER_UPSTREAM}
+}
+CADDY6
+  info "Added the Mail archive route: ${MAIL_HOST} -> ${OPENARCHIVER_UPSTREAM} (its own login)."
 fi
 
 log "Validating and reloading Caddy"

@@ -106,8 +106,13 @@ before the first start**, not after.
 
 ## 5. Maturity — the honest reservation
 
+- **Still 0.x.** Latest release is **v0.5.2** (27 July 2026, the day of this assessment). A pre-1.0
+  version number is the project's own statement that breaking changes are expected — which is exactly
+  why the pin is recorded and never floats, and why this is a time-boxed evaluation.
 - **2.2k stars, but only 204 commits and 171 open issues** (plus 29 open PRs). That issue-to-commit ratio
   is high; it reads as a young project with more demand than throughput.
+- There is also a commercial **`-enterprise`** image line in the registry alongside the open tags — worth
+  knowing, though nothing we use depends on it.
 - **Legal holds are marked TBD** — irrelevant to us (we are not doing compliance retention), but a
   signal that advertised compliance features are not all implemented.
 - **AGPL-3.0**, self-hosted, no cloud dependency for our use case. No licensing concern here.
@@ -186,13 +191,61 @@ egress verdict came back clean while OCR stayed unproven until it was tested on 
 | Step | What | Gate |
 |---|---|---|
 | ~~**0**~~ | ~~Answer Q6~~ — **DONE (§6a): every facet present, plus attachment-content search** | ✅ passed |
-| **1** | Write `archive-openarchiver-setup.sh` to repo convention: pinned images, loopback-bound, Caddy route, `MEILI_NO_ANALYTICS=true`, no cloud connectors, own volumes on the OS disk | Q6 says yes |
+| ~~**1**~~ | ~~Write `archive-openarchiver-setup.sh`~~ — **DONE (§7a), sandbox-tested, CI-gated** | ✅ |
 | **2** | Stand it up and import a **synthetic** mailbox; run the egress test (§4.2); confirm the source file is untouched (checksum before == after); **and prove Tika OCRs an image-only attachment** (§6a) | — |
 | **3** | Import a **COPY** of `Outlook MKH.pst`; measure RAM and ingest time | §2 passes clean |
 | **4** | Run the actual hunt: Ratliff · "Northern Trust" · March 2009 · has-attachment · Hartigan Kenilworth · "December 5" | — |
 | **5** | Decide: does it stay resident, or was it a one-off instrument? | honest answer |
 
 Steps 0–2 involve no family data at all. Step 3 is the first that does, and only from a copy.
+
+---
+
+## 7a. What was built (2026-07-27) — and the six things upstream's compose gets wrong for us
+
+`archive-openarchiver-setup.sh` deploys **pinned v0.5.2**, and deliberately diverges from upstream's
+`docker-compose.yml` in six places. Each is a real defect *for this box*, not a style preference:
+
+| # | Upstream ships | We ship | Why |
+|---|---|---|---|
+| 1 | no `MEILI_NO_ANALYTICS` | `MEILI_NO_ANALYTICS: "true"` on the Meilisearch service | telemetry is on by default (§4.1) |
+| 2 | `ports: '3000:3000'` — every interface | `127.0.0.1:3010:3000` | Caddy fronts it; 3000 is already Docmost's |
+| 3 | `container_name: postgres` / `valkey` / `meilisearch` / `tika` | `openarchiver-*` | those are **global** Docker names; bare `postgres` would collide with any other stack |
+| 4 | `POSTGRES_PASSWORD:-password`, `MEILI_MASTER_KEY:-aSampleMasterKey` | generated, reused on re-run | upstream's defaults are examples, not secrets |
+| 5 | no import path | `$APP_DIR/import` mounted **`:ro`**, archive never mounted | the app cannot alter or delete even our copies; masters are unreachable from any container |
+| 6 | deletion available | `ENABLE_DELETION=false` | nothing in this archive gets deleted by an app |
+
+**Enforced by CI, not by good intentions.** `ci/validate-compose.py` now checks this stack with
+`archive=None, loopback=True`, so a future edit that mounts `/srv/archive` into a container, or
+publishes a port on all interfaces, **fails the build**.
+
+### Sandbox-tested before it goes near the box
+
+Against stub `docker`/`sudo`/`git`, on scratch directories:
+
+- all six hardening properties present in the written compose; `.env` is `0600`
+- **a re-run reuses all six secrets** — this is the one that matters most: rotating `ENCRYPTION_KEY`
+  or `STORAGE_ENCRYPTION_KEY` would make already-stored mail permanently unreadable
+- **no version drift on re-run** (stays on the deployed tag); `--upgrade` advances it and still keeps
+  the encryption keys
+
+### `openarchiver/verify-openarchiver.sh` — four gates, before any family mail
+
+| Gate | Proves |
+|---|---|
+| `harden` | reads the **running** config, not the file we wrote: telemetry off, loopback-only, archive not mounted, import read-only, deletion off, no cloud credentials, no upstream default secrets |
+| `ocr` | **the deciding gate** — builds a synthetic mailbox whose only content of interest is the repo's committed image-only PDF, then looks for a token that exists *nowhere in plaintext* |
+| `egress` | detaches the containers from outward-facing networks and confirms the app still serves |
+| `source` | sha256 before == after, and the file still exists — upstream's behaviour toward its source is undocumented |
+
+Also tested in **both** directions: against a deliberately unsafe config (telemetry missing, port on
+`0.0.0.0`, archive mounted writable, import writable, cloud credentials, upstream default secrets) the
+harden gate catches **all six** and exits non-zero; and a tampered source file is caught by `source`.
+
+The synthetic mailbox was validated by parsing it back with Python's `mailbox` module: two messages, the
+attachment byte-identical to the fixture, and — critically — **the token `OCRWILLMARKER` appears nowhere
+in the file's plaintext**. A search hit for it can therefore only have come from OCR. That is what makes
+gate 2 a real test rather than a formality.
 
 ---
 

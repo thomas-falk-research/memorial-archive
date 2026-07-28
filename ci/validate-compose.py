@@ -57,6 +57,12 @@ VARS = {
     "PAPERLESS_PORT": "8000",
     "PG_IMAGE": "postgres:16-alpine",
     "REDIS_IMAGE": "redis:7-alpine",
+    "OPENARCHIVER_IMAGE": "logiclabshq/open-archiver",
+    "OPENARCHIVER_PORT": "3010",
+    "OA_PG_IMAGE": "postgres:17-alpine",
+    "OA_VALKEY_IMAGE": "valkey/valkey:8-alpine",
+    "OA_MEILI_IMAGE": "getmeili/meilisearch:v1.38",
+    "OA_TIKA_IMAGE": "apache/tika:3.2.2.0-full",
 }
 
 # (setup script, compose filename, expectations). archive: "ro" = must mount the archive read-only;
@@ -77,6 +83,10 @@ APPS = [
      dict(archive=None, loopback=True)),
     ("archive-kopia-setup.sh", "docker-compose.yml",
      dict(archive=None, loopback=None, must_mount=["/srv/pc-backups"])),
+    # Open Archiver must NEVER mount the archive: mail is imported from COPIES placed in its own
+    # import/ directory. That is the whole safety design, so the validator enforces it.
+    ("archive-openarchiver-setup.sh", "docker-compose.yml",
+     dict(archive=None, loopback=True)),
 ]
 
 ARCHIVE = VARS["ARCHIVE_ROOT"]
