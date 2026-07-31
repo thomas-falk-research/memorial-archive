@@ -150,7 +150,6 @@ PORT_FRONTEND=3000
 PORT_BACKEND=4000
 APP_URL=${OPENARCHIVER_URL}
 ORIGIN=${OPENARCHIVER_URL}
-STORAGE_LOCAL_ROOT_PATH=/var/lib/open-archiver
 
 JWT_SECRET=${jwt}
 ENCRYPTION_KEY=${enc}
@@ -164,17 +163,37 @@ DATABASE_URL=postgresql://openarchiver:${db_pw}@openarchiver-postgres:5432/open_
 MEILI_MASTER_KEY=${meili}
 MEILI_HOST=http://openarchiver-meilisearch:7700
 MEILI_NO_ANALYTICS=true
+MEILI_INDEXING_BATCH=500
 
 REDIS_HOST=openarchiver-valkey
 REDIS_PORT=6379
 REDIS_PASSWORD=${redis_pw}
+REDIS_TLS_ENABLED=false
+# REDIS_USER is deliberately UNSET: our valkey uses plain --requirepass (no ACL users), so
+# password-only auth is correct. Upstream's example value would not authenticate here.
+
+# --- Storage. STORAGE_TYPE is REQUIRED: the backend throws "Invalid STORAGE_TYPE: undefined"
+# at config load and every backend process dies, leaving a frontend that loads but can never
+# reach its API. Learned the hard way — see docs/OPENARCHIVER-ASSESSMENT.md.
+STORAGE_TYPE=local
+STORAGE_LOCAL_ROOT_PATH=/var/lib/open-archiver
+BODY_SIZE_LIMIT=100M
 
 TIKA_URL=http://openarchiver-tika:9998
+PDF_PARSE_TIMEOUT_MS=20000
+
+JWT_EXPIRES_IN=7d
+RATE_LIMIT_WINDOW_MS=60000
+RATE_LIMIT_MAX_REQUESTS=100
+RETENTION_BATCH_SIZE=1000
 
 # Deliberate policy for this archive:
 ENABLE_DELETION=false
 INGESTION_WORKER_CONCURRENCY=2
 ALL_INCLUSIVE_ARCHIVE=true
+# No live connectors are configured, so the scheduler has nothing to do — but it must still
+# parse a valid cron expression or it exits.
+SYNC_FREQUENCY=0 3 * * *
 ENVEOF
 sudo chmod 600 "$APP_DIR/.env"
 
@@ -264,6 +283,40 @@ grep -q '/import:ro' <<<"$cfg" || grep -q 'read_only: true' <<<"$cfg" || warn "t
 
 log "Starting Open Archiver (first run pulls ~5 images and initialises the database — several minutes)"
 ( cd "$APP_DIR" && sudo docker compose up -d )
+
+# ---- Prove the BACKEND came up -----------------------------------------------------------------
+# The app container runs a frontend AND a backend. A bad .env kills only the backend, and the
+# frontend keeps serving happily — you get a UI that loads, cannot answer "is there an admin yet?",
+# and silently falls back to a login page you can never get past. This script used to print
+# "Done — Open Archiver is starting" in exactly that state. It does not any more.
+log "Waiting for the backend to listen on :4000 (this is where a bad .env shows itself)"
+backend_up=false
+for _i in $(seq 1 36); do
+  if sudo docker exec openarchiver-app node -e \
+      'require("net").connect(4000,"127.0.0.1").on("connect",()=>{console.log("OPEN");process.exit(0)}).on("error",()=>process.exit(1))' \
+      2>/dev/null | grep -q OPEN; then
+    backend_up=true; break
+  fi
+  sleep 5
+done
+
+if [[ "$backend_up" != true ]]; then
+  warn "THE BACKEND NEVER CAME UP."
+  warn "The web UI will load and show a sign-in page, but no account can ever be created through it."
+  printf '\n    Backend errors from the log:\n'
+  ( cd "$APP_DIR" && sudo docker compose logs open-archiver 2>/dev/null ) \
+    | grep -iE 'Error:|FATAL|ECONNREFUSED|Invalid ' | grep -v 'Proxy request failed' | head -15 | sed 's/^/      /'
+  cat <<FAILED
+
+    Most likely a missing or invalid value in ${APP_DIR}/.env — the backend validates its config at
+    startup and exits on the first bad one, taking the API and all three workers with it.
+
+    Full log:   cd ${APP_DIR} && sudo docker compose logs open-archiver | head -80
+    Try again:  bash ${0##*/} --yes      (re-runs are safe; secrets are preserved)
+FAILED
+  exit 1
+fi
+info "backend is listening — the API, workers and UI are all up."
 
 log "Done — Open Archiver is starting."
 cat <<EOF

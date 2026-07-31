@@ -260,6 +260,32 @@ Tested three ways: a real cut with a surviving app (PASS), a cut that silently f
 original bug — (FAIL, refuses to certify), and an app that dies without egress (FAIL). The override is
 cleaned up in every case.
 
+### The install reported success while the backend was dead
+
+The stack came up, the hardening verified, gates 1 and 3 passed — and the UI still showed only a
+sign-in page with no way to create an account. The cause was in the `.env` **I** wrote:
+
+```
+Error: Invalid STORAGE_TYPE: undefined
+```
+
+`STORAGE_TYPE` is required. The backend validates its config at startup and exits on the first bad
+value, which killed the API and all three workers (ingestion, indexing, sync-scheduler). The frontend
+kept serving, so the app *looked* healthy: it just couldn't ask its own API "is there an admin yet?",
+and fell back to the login page. The database was fine throughout — all 22 tables, migrations clean.
+
+Root cause on my side: I built the `.env` from a **summary** of upstream's `.env.example` rather than
+the file itself, and dropped seven variables. `STORAGE_TYPE` was fatal; `BODY_SIZE_LIMIT` (upstream
+sets 100M, SvelteKit defaults to 512K) would have surfaced later as mysterious upload failures.
+
+**The deeper fault was that the setup script announced "Done — Open Archiver is starting" in that
+state.** It now waits for the backend to listen on :4000, and if it never does, prints the filtered
+backend errors from the log and **exits non-zero** instead of declaring success. Same principle the
+verification gates already follow: do not report a property you have not observed.
+
+Tested both ways against a stub: a healthy backend reaches "Done", and one that never listens fails
+loudly with the diagnosis and exit 1.
+
 ### Second correction to the same gate, from the first real run
 
 On the box, gate 3 proved the cut (raw IP and DNS both unreachable from inside) and then reported the
