@@ -333,18 +333,32 @@ s.on("timeout",()=>done("BLOCKED"));
 # ------------------------------------------------------------------------------------------------
 gate_source(){
   hdr "GATE 4/4 — is an imported file left untouched?"
+  mkdir -p "$WORK" 2>/dev/null   # without this the baseline write fails SILENTLY and every run
+                                 # re-records instead of comparing — i.e. never actually checks
   local f="$IMPORT_DIR/${SYNTH_PREFIX}.mbox"
+  local stored="$WORK/${SYNTH_PREFIX}.sha256"
+
+  # A missing file means opposite things depending on whether we have a baseline. With one, the file
+  # was moved or consumed BY THE IMPORT — the single most dangerous outcome this gate exists to catch.
   if [ ! -s "$f" ]; then
-    warn "no synthetic mailbox in $IMPORT_DIR — run 'ocr' first (it creates one)"
+    if [ -f "$stored" ]; then
+      bad "THE SOURCE FILE IS GONE after import — it was moved or consumed, not just read."
+      bad "  Expected: $f"
+      bad "  A master fed to this app would have been destroyed. Import only from copies."
+      fails=$((fails+1))
+    else
+      warn "no synthetic mailbox in $IMPORT_DIR and no baseline recorded — run 'ocr' first (it creates one)"
+    fi
     return 0
   fi
-  local sum_now stored="$WORK/${SYNTH_PREFIX}.sha256"
-  sum_now="$(sha256sum "$f" | awk '{print $1}')"
+
+  local sum_now; sum_now="$(sha256sum "$f" | awk '{print $1}')"
   if [ -f "$stored" ]; then
     local sum_before; sum_before="$(cat "$stored")"
     if [ "$sum_now" = "$sum_before" ]; then
       ok "the imported file is byte-identical to before the import"
       ok "  $sum_now"
+      ok "the file still exists after import (not moved or consumed)"
     else
       bad "THE SOURCE FILE CHANGED during import"
       bad "  before: $sum_before"
@@ -353,12 +367,15 @@ gate_source(){
       fails=$((fails+1))
     fi
   else
-    printf '%s' "$sum_now" >"$stored"
-    ok "recorded the pre-import checksum: $sum_now"
-    say "      run this gate again AFTER the import completes to prove the file was not modified"
+    if printf '%s' "$sum_now" >"$stored"; then
+      ok "recorded the pre-import checksum: $sum_now"
+      say "      baseline only — nothing is proven yet. Run this gate AGAIN after the import; the"
+      say "      comparison is what answers whether the file was modified or removed."
+    else
+      bad "could not write the baseline to $stored — this gate cannot verify anything"
+      fails=$((fails+1))
+    fi
   fi
-  # Deletion is the other half of the question.
-  [ -e "$f" ] && ok "the file still exists after import (not moved or consumed)"
 }
 
 # ------------------------------------------------------------------------------------------------
