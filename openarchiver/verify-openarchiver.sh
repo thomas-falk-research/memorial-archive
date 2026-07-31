@@ -257,15 +257,49 @@ OVR
   if ! ( cd "$APP_DIR" && sudo docker compose -f docker-compose.yml -f docker-compose.egress-test.yml up -d >/dev/null 2>&1 ); then
     bad "could not apply the egress-test override"; fails=$((fails+1)); restore; trap - EXIT INT TERM; return 1
   fi
-  # The app also joins the shared 'memorial' bridge, which would keep egress alive on its own.
-  sudo docker network disconnect memorial openarchiver-app >/dev/null 2>&1 && say "  detached from the shared 'memorial' bridge too"
+  # The app ALSO joins the shared 'memorial' bridge, which would keep its egress alive regardless of
+  # what we did to the project network. Detach it, then VERIFY the detachment — a best-effort
+  # `|| true` here would leave the gate certifying a container that still had a way out.
+  sudo docker network disconnect memorial openarchiver-app >/dev/null 2>&1 \
+    && say "  detached openarchiver-app from the shared 'memorial' bridge"
+  local still_on
+  still_on="$(sudo docker inspect openarchiver-app \
+    --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' 2>/dev/null \
+    | tr ' ' '\n' | grep -v "^$" | grep -vF "$net" || true)"
+  if [ -n "$still_on" ]; then
+    bad "openarchiver-app is still attached to a network outside the cut: $(tr '\n' ' ' <<<"$still_on")"
+    bad "  It may retain outbound access through it, so this gate cannot certify anything."
+    fails=$((fails+1)); restore; trap - EXIT INT TERM; return 1
+  fi
+  ok "openarchiver-app is attached ONLY to the internal network"
+
+  # Ask the APP CONTAINER ITSELF, not a sibling. A probe container on the project network proves that
+  # NETWORK has no route out; it says nothing about a container that also sits on another bridge.
+  # The app is a Node service, so node is guaranteed present — no extra tooling needed.
+  local app_egress
+  app_egress="$(sudo docker exec openarchiver-app node -e '
+const s=require("net").connect({host:"1.1.1.1",port:443});
+s.setTimeout(5000);
+const done=(v)=>{console.log(v);process.exit(0)};
+s.on("connect",()=>done("OPEN"));
+s.on("error",()=>done("BLOCKED"));
+s.on("timeout",()=>done("BLOCKED"));
+' 2>/dev/null | tr -d '\r\n')"
+  case "$app_egress" in
+    BLOCKED) ok "the APP CONTAINER itself cannot open an outbound connection" ;;
+    OPEN)    bad "THE APP CONTAINER CAN STILL REACH THE INTERNET — the cut did not hold."
+             bad "  Do not treat the stack as verified offline."
+             fails=$((fails+1)); restore; trap - EXIT INT TERM; return 1 ;;
+    *)       warn "could not test egress from inside the app container (node probe returned '${app_egress:-nothing}')"
+             warn "falling back to the network-level probe, which is weaker" ;;
+  esac
 
   if egress_open "$net"; then
     bad "EGRESS IS STILL OPEN after the cut — this gate cannot certify anything."
     bad "  Do not treat the stack as verified offline. Investigate before importing mail."
     fails=$((fails+1)); restore; trap - EXIT INT TERM; return 1
   fi
-  ok "the outside world is now UNREACHABLE from the stack's network (raw IP and DNS both fail)"
+  ok "the stack's network has no route out either (raw IP and DNS both fail)"
 
   # Check the app FROM INSIDE the network, not from the host.
   #

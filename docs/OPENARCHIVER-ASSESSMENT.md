@@ -274,6 +274,25 @@ network**, where it is still addressable while egress is genuinely gone. Both qu
 and the check keeps its teeth — verified against a stub where the app is genuinely dead in-network
 (still FAILS) and one where it is healthy while the host port is unreachable (now PASSES).
 
+### Third correction: the gate was testing the wrong container
+
+The first passing run on the box printed no "detached from the shared 'memorial' bridge" line. That
+mattered: the egress probe ran in a **sibling** container on the project network, so it proved *that
+network* had no route out — while the app container also joins the shared `memorial` bridge and could
+have retained egress through it. The gate would have certified "offline" on the strength of a probe
+that was not the thing being certified.
+
+Now it (a) detaches `openarchiver-app` from `memorial` and **verifies the detachment**, failing if the
+container is still attached to any network outside the cut, and (b) asks **the app container itself**
+whether it can open an outbound TCP connection, using the Node runtime that is guaranteed present in
+that image. The network-level probe is retained as a secondary check rather than the primary evidence.
+
+Tested three ways: a clean cut (PASS), the app still attached to `memorial` after the cut (FAIL), and a
+cut network where the app can nevertheless still reach the internet (FAIL).
+
+**Result on archive-pc: gates 1 and 3 PASS.** Hardening is live on the running stack, and the app keeps
+serving with egress genuinely cut.
+
 The synthetic mailbox was validated by parsing it back with Python's `mailbox` module: two messages, the
 attachment byte-identical to the fixture, and — critically — **the token `OCRWILLMARKER` appears nowhere
 in the file's plaintext**. A search hit for it can therefore only have come from OCR. That is what makes
