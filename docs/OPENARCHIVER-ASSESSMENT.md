@@ -260,6 +260,36 @@ Tested three ways: a real cut with a surviving app (PASS), a cut that silently f
 original bug — (FAIL, refuses to certify), and an app that dies without egress (FAIL). The override is
 cleaned up in every case.
 
+### ✅ GATE 2 PASSED on archive-pc — the value case is confirmed
+
+Searching `OCRWILLMARKER` returned **1 result in 0.001s**, matched **inside the attachment**
+(`scanned.pdf`), with the OCR'd text shown as context:
+
+> *"…grants power of attorney. It is to be filed for probate. Document reference:* **OCRWILLMARKER**
+> *LAST WILL AND TESTAMENT OF JANE ARCHIVE DOE…"*
+
+That token appears nowhere in the mbox's plaintext — not in a header, subject or body. The only path
+from the file to the index was **Tika OCR'ing an image-only PDF attachment**. So:
+
+- attachment-content search genuinely sees inside scans, which is the entire reason for deploying this;
+- the result view names the attachment the hit came from and shows surrounding text, so a hit is
+  immediately identifiable rather than a bare filename;
+- the message's 2009 date parsed correctly, so date-range filtering will work on real correspondence.
+
+**Every faxed scan in MKH's mailbox is therefore reachable by content**, which is exactly the class of
+document — `FaxImage.tif`, `SKM_*.pdf`, bare-numbered attachments — that has defeated filename and
+plain full-text search for months.
+
+**Status: gates 1, 2 and 3 pass.** Gate 4 (source integrity) is meaningful only around a real import.
+
+### Closing the last gap before real mail: `verify-openarchiver.sh staged`
+
+Gate 4 knows the *synthetic* fixture by name, which is no use for the real mailbox. The new `staged`
+gate reads `import/PROVENANCE.tsv` and re-verifies **every** file `stage-mailbox.sh` has staged: still
+present, still byte-identical to what was copied. On a mismatch it prints the master's path so the copy
+can be re-made from a source that was never touched. Tested three ways — all intact (PASS), one file
+modified (FAIL with both checksums), one file consumed (FAIL naming it as moved-or-consumed).
+
 ### The install reported success while the backend was dead
 
 The stack came up, the hardening verified, gates 1 and 3 passed — and the UI still showed only a

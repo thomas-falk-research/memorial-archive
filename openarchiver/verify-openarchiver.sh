@@ -379,11 +379,53 @@ gate_source(){
 }
 
 # ------------------------------------------------------------------------------------------------
+# gate_staged — verify EVERY file staged by stage-mailbox.sh against its recorded checksum.
+# gate_source only knows the synthetic fixture by name; this covers the real mailboxes, which is
+# where being wrong actually costs something. Run it after any import.
+gate_staged(){
+  hdr "STAGED FILES — still present, still byte-identical to what was staged?"
+  local manifest="$IMPORT_DIR/PROVENANCE.tsv"
+  if [ ! -s "$manifest" ]; then
+    warn "no $manifest — nothing has been staged with stage-mailbox.sh yet"
+    return 0
+  fi
+  local n=0 bad_n=0 sha name path
+  while IFS=$'\t' read -r _ts sha _bytes name path; do
+    [ "$_ts" = "staged_utc" ] && continue      # header
+    [ -n "$name" ] || continue
+    n=$((n+1))
+    local f="$IMPORT_DIR/$name"
+    if [ ! -e "$f" ]; then
+      bad "GONE: $name was staged but is no longer in $IMPORT_DIR"
+      bad "  the app moved or consumed it — its master is still at: ${path:-unknown}"
+      bad_n=$((bad_n+1)); fails=$((fails+1)); continue
+    fi
+    local now; now="$(sha256sum "$f" | awk '{print $1}')"
+    if [ "$now" = "$sha" ]; then
+      ok "unchanged: $name"
+    else
+      bad "MODIFIED: $name"
+      bad "  staged: $sha"
+      bad "  now   : $now"
+      bad "  master (untouched, re-stage from here): ${path:-unknown}"
+      bad_n=$((bad_n+1)); fails=$((fails+1))
+    fi
+  done < "$manifest"
+  [ "$n" -eq 0 ] && { warn "manifest has no entries"; return 0; }
+  if [ "$bad_n" -eq 0 ]; then
+    ok "all $n staged file(s) intact — the app reads its imports and leaves them alone"
+  else
+    bad "$bad_n of $n staged file(s) changed or vanished. NEVER stage a master; re-copy from the archive."
+  fi
+}
+
+# ------------------------------------------------------------------------------------------------
 case "${1:-all}" in
   harden) gate_harden ;;
   ocr)    gate_ocr ;;
   egress) gate_egress ;;
   source) gate_source ;;
+  staged) gate_staged ;;
   clean)
     hdr "Removing synthetic fixtures"
     rm -f "$IMPORT_DIR/${SYNTH_PREFIX}.mbox" 2>/dev/null || sudo rm -f "$IMPORT_DIR/${SYNTH_PREFIX}.mbox"
@@ -395,8 +437,9 @@ case "${1:-all}" in
     gate_harden
     if [ "$fails" -eq 0 ]; then gate_ocr; else warn "skipping later gates until hardening passes"; fi
     if [ "$fails" -eq 0 ]; then gate_egress; fi
-    if [ "$fails" -eq 0 ]; then gate_source; fi ;;
-  *) say "Usage: ${0##*/} [all|harden|ocr|egress|source|clean]"; exit 2 ;;
+    if [ "$fails" -eq 0 ]; then gate_source; fi
+    if [ "$fails" -eq 0 ]; then gate_staged; fi ;;
+  *) say "Usage: ${0##*/} [all|harden|ocr|egress|source|staged|clean]"; exit 2 ;;
 esac
 
 hdr "RESULT"
