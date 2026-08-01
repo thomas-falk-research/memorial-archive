@@ -68,6 +68,28 @@ get(){ awk -F'\t' -v k="$1" '$1==k{v=$2} END{print v}' "$STATE" 2>/dev/null; }
 
 alive || die "$PG is not running — start the stack first."
 
+# stage_or_accept <path> — stage a copy, or accept one that is already there IF it matches the
+# master. Dying because a previous attempt already staged the file would strand the experiment
+# halfway, and re-staging is not always possible (deletion may be disabled).
+stage_or_accept(){
+  local src="$1"; local dst
+  dst="$APP_DIR/import/$(basename "$src")"
+  if [ -e "$dst" ]; then
+    local m c
+    m="$(sha256sum "$src" 2>/dev/null | awk '{print $1}')"
+    c="$(sha256sum "$dst" 2>/dev/null | awk '{print $1}')"
+    if [ -n "$m" ] && [ "$m" = "$c" ]; then
+      ok "already staged and byte-identical to the master — reusing it"
+      return 0
+    fi
+    die "a DIFFERENT file is already staged as $(basename "$dst").
+    staged: ${c:-unreadable}
+    master: ${m:-unreadable}
+    Resolve that before continuing — do not import a file you cannot account for."
+  fi
+  bash "$HERE/stage-mailbox.sh" "$src" --go
+}
+
 case "${1:-help}" in
 # ------------------------------------------------------------------------------------------------
 step1)
@@ -79,7 +101,7 @@ step1)
   if [ -n "$ic" ]; then ok "message-identity column: archived_emails.$ic"; record idcol "$ic"
   else warn "no message-id column found; step 3 will fall back to subject+date matching"; fi
   say ""
-  bash "$HERE/stage-mailbox.sh" "$A" --go || die "staging A failed"
+  stage_or_accept "$A" || die "staging A failed"
   record file_a "$(basename "$A")"
   hdr "NOW, IN THE UI"
   say "  Ingestion sources -> add source"
@@ -102,7 +124,7 @@ step2)
   ok "before A: $base    after A: $after_a    A contributed: $((after_a - base)) messages"
   [ "$((after_a - base))" -gt 0 ] || warn "A added nothing — did the import actually finish?"
   say ""
-  bash "$HERE/stage-mailbox.sh" "$B" --go || die "staging B failed"
+  stage_or_accept "$B" || die "staging B failed"
   record file_b "$(basename "$B")"
   hdr "NOW, IN THE UI"
   say "  Add a SECOND, separate source (do not merge it into the first):"
@@ -163,9 +185,35 @@ step3)
   say "      bash openarchiver/verify-openarchiver.sh staged"
   ;;
 # ------------------------------------------------------------------------------------------------
+adopt-a)
+  # A was imported before the experiment was wired up — adopt the current state as "after A" so the
+  # run can continue. The duplicate-group query in step3 is the primary evidence and does not depend
+  # on the baseline, so this loses only the a_added/b_added ratio.
+  hdr "ADOPT — treat the current archive as the post-A state"
+  cur="$(total)"; [ -n "$cur" ] || die "could not read the message count."
+  ic="$(id_col || true)"
+  : >"$STATE"
+  record baseline 0
+  record after_a "$cur"
+  [ -n "$ic" ] && record idcol "$ic"
+  ok "recorded after_a = $cur messages${ic:+, identity column $ic}"
+  warn "baseline is unknown, so step3's A-vs-B ratio is not meaningful — the duplicate query is."
+  say ""
+  stage_or_accept "$B" || die "staging B failed"
+  hdr "NOW, IN THE UI"
+  say "  Add a SECOND, separate source:"
+  say "    Provider: PST Import   ·   Import method: Local Path"
+  say "    Local path: /import/$(basename "$B")"
+  printf '      %sPreserve Original File  = CHECKED%s\n' "$c_g" "$c_0"
+  printf '      %sMerge into existing     = UNCHECKED%s\n' "$c_g" "$c_0"
+  say "  Wait for the job to FINISH, then run:   bash ${0##*/} step3"
+  ;;
 reset) : >"$STATE"; ok "cleared $STATE (the app and its data were not touched)" ;;
 *)
-  say "Usage: ${0##*/} [step1|step2|step3|reset]"
+  say "Usage: ${0##*/} [step1|step2|adopt-a|step3|reset]"
+  say ""
+  say "  adopt-a: use when mailbox A was already imported outside this flow (creating an"
+  say "           ingestion source starts the import immediately)."
   say ""
   say "  Decides whether importing all 75 distinct PSTs gives completeness or ten copies of"
   say "  every email. Uses two 63 MB archive mailboxes from different backup dates."

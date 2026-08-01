@@ -50,6 +50,27 @@ container, and even so, nothing but a verified copy is ever placed in it:
 - it refuses to overwrite, refuses to move, and deletes nothing
 - provenance is appended to `import/PROVENANCE.tsv`, so a copy can always name its master
 
+## Two operational gotchas
+
+**`ENABLE_DELETION=false` blocks deleting ingestion sources, not just mail.** That is the hardening
+working as designed — nothing in this archive gets deleted by an app — but it also blocks ordinary
+housekeeping like removing a test source. To do that deliberately:
+
+```bash
+sudo sed -i 's/^ENABLE_DELETION=false/ENABLE_DELETION=true/' /srv/apps/openarchiver/.env
+cd /srv/apps/openarchiver && sudo docker compose up -d     # delete the source in the UI, then:
+bash ~/memorial-archive/archive-openarchiver-setup.sh --yes   # puts it back to false
+```
+
+**Creating an ingestion source starts the import immediately.** There is no separate "run" step, so
+stage the file and set the checkboxes *before* submitting. In the Advanced Options:
+
+- **Preserve Original File — CHECKED.** Unchecked, the app deletes or moves its source. The
+  read-only `import/` mount turns that into a loud failure rather than a lost copy, but do not rely
+  on it.
+- **Merge into existing ingestion** — leave unchecked unless you specifically want generations of one
+  mailbox folded together.
+
 ## Standing rules for this app
 
 - **Never configure the Google Workspace / Microsoft 365 / IMAP connectors.** They are the only parts
