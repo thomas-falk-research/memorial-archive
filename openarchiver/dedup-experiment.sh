@@ -208,9 +208,32 @@ adopt-a)
   printf '      %sMerge into existing     = UNCHECKED%s\n' "$c_g" "$c_0"
   say "  Wait for the job to FINISH, then run:   bash ${0##*/} step3"
   ;;
+check)
+  # Point-in-time reading. Use it around any import to see whether duplication grew — including the
+  # "Merge into existing ingestion" test, which needs no deletion and no clean slate.
+  hdr "CURRENT STATE"
+  ic="$(get idcol)"; [ -n "$ic" ] || ic="$(id_col || true)"
+  cur="$(total)"
+  say "  messages archived: ${cur:-unknown}"
+  if [ -n "$ic" ]; then
+    dg="$(q "select count(*) from (select $ic from archived_emails where $ic is not null group by $ic having count(*)>1) t")"
+    wc_="$(q "select max(c) from (select count(*) c from archived_emails where $ic is not null group by $ic) t")"
+    dr="$(q "select count(*)-count(distinct $ic) from archived_emails where $ic is not null")"
+    say "  distinct messages present more than once: ${dg:-?}   (worst case: ${wc_:-?} copies)"
+    say "  redundant rows (stored copies beyond the first): ${dr:-?}"
+  fi
+  say ""
+  say "  To test whether MERGE deduplicates — no deletion or clean slate needed:"
+  say "    1. note the numbers above"
+  say "    2. import a mailbox you have ALREADY imported, this time with"
+  say "       \"Merge into existing ingestion\" CHECKED, targeting the source that holds it"
+  say "    3. run this again."
+  say "  If the count barely moves, merge deduplicates. If it jumps by the mailbox's full message"
+  say "  count, it does not, and duplication is simply the price of completeness."
+  ;;
 reset) : >"$STATE"; ok "cleared $STATE (the app and its data were not touched)" ;;
 *)
-  say "Usage: ${0##*/} [step1|step2|adopt-a|step3|reset]"
+  say "Usage: ${0##*/} [step1|step2|adopt-a|step3|check|reset]"
   say ""
   say "  adopt-a: use when mailbox A was already imported outside this flow (creating an"
   say "           ingestion source starts the import immediately)."

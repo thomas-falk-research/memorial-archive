@@ -392,6 +392,51 @@ or `historical.pst`) before assuming the whole corpus fits an overnight window.
 Even at 10× that floor it is a long weekend, not a month — so **importing all 75 is affordable**, and the
 remaining question is purely whether duplicates make it *useful* (§7b).
 
+## 7c. MEASURED: no cross-source dedup — and why "newest only" is unsafe
+
+The experiment ran on two 63 MB auto-archives, July 2013 (A) and February 2018 (B):
+
+| | |
+|---|---|
+| After A | 612 messages (610 + 2 synthetic) |
+| After B | 1,222 — **B added all 610** |
+| Messages now stored twice | **330**, worst case 2 copies |
+
+**Open Archiver does not deduplicate across separate ingestion sources.** Two overlapping mailboxes
+produce two copies of every shared message.
+
+**But the more consequential number is 330.** A held 610, B held 610, and only 330 are shared — so
+**280 messages exist ONLY in the 2013 file.** The 2018 auto-archive dropped them, presumably pruned or
+re-archived elsewhere. Across a single pair, "just take the newest generation" would silently lose
+**46% of the older mailbox's content.**
+
+That kills the fallback this document previously recommended. For mail from **2009** — older than every
+backup generation we hold — the oldest archives are the likeliest survivors, so the pruning that makes
+newer files cleaner is exactly what removes the evidence we want.
+
+### Which reframes the duplicate problem
+
+The objection to duplicates was **family usability** — and that objection stands, for a browsing tool.
+But it does not apply to the job in front of us:
+
+- **This instance's purpose right now is a hunt**, not daily browsing. When searching for one faxed
+  will, seeing the hit twice costs nothing; missing it entirely costs everything.
+- **The family's browsing tools are copyparty and Immich**, not this. Nobody is being handed a
+  duplicate-ridden mail UI as their day-to-day interface.
+- **Completeness is the standing rule** of this archive; duplication is cosmetic, loss is not.
+- **It is affordable** (§7a): ~68 GiB and an overnight-to-weekend run.
+
+**Revised recommendation: import all 75 distinct mailboxes, accepting duplication**, unless the merge
+test below removes it for free. Deduplicating the *view* later is a solvable problem; recovering a
+message that was never imported is not.
+
+### The merge test, which needs no clean slate
+
+`dedup-experiment.sh check` reads the current counts, then: re-import an already-imported mailbox with
+**"Merge into existing ingestion" CHECKED**, and run `check` again. If the count barely moves, merge
+deduplicates and we get completeness *and* cleanliness. If it jumps by the mailbox's full message
+count, duplication is simply the price, and §7c says pay it.
+
 ## 7b. Deciding whether to import all 75 mailboxes
 
 The archive holds **102 PST files, 74.4 GiB → 75 distinct, 61.4 GiB** (`inventory-mailboxes.sh`).
