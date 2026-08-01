@@ -128,8 +128,17 @@ the same line that made the Paperless *ingest* unacceptable to take on right now
 ## 6. Open questions — verify at deploy, before real mail
 
 1. **Does PST import handle a 1.67 GB mailbox** on this hardware, and what does it peak at? **[unmeasured]**
-2. **What does it do to the source file** after import — read only, move, or delete? Test with a
-   throwaway copy first. This is the one that could hurt.
+2. ~~**What does it do to the source file**~~ — **ANSWERED, twice over.** Gate 4 measured it: after
+   a real import the staged file was byte-identical and still present. And the UI shows *why* the
+   question mattered — the ingestion dialog has a **"Preserve Original File"** checkbox. Unchecked,
+   the app deletes or moves its source after importing.
+   **Two consequences.** Every import must have that box checked. And the read-only `import/` mount
+   earns its place: with the box unchecked the deletion would **fail loudly against a read-only
+   filesystem** rather than quietly destroying a staged copy. A defence that was speculative when it
+   was designed turns out to guard a switch that sits one click away — defaulted in the operator's
+   favour, but trivially turned off.
+   The same dialog offers **"Merge into existing ingestion"**, plausibly the cross-source
+   deduplication mechanism — see §7b.
 3. **Real RAM at rest vs during ingest** — the "4 GB" figure is upstream's floor, not a measurement.
    Meilisearch in particular is memory-mapped and grows with the index. **[unmeasured]**
 4. **Does the stack function with egress blocked** (§4.2)?
@@ -353,6 +362,35 @@ The synthetic mailbox was validated by parsing it back with Python's `mailbox` m
 attachment byte-identical to the fixture, and — critically — **the token `OCRWILLMARKER` appears nowhere
 in the file's plaintext**. A search hit for it can therefore only have come from OCR. That is what makes
 gate 2 a real test rather than a formality.
+
+---
+
+## 7b. Deciding whether to import all 75 mailboxes
+
+The archive holds **102 PST files, 74.4 GiB → 75 distinct, 61.4 GiB** (`inventory-mailboxes.sh`).
+Wanting all of them is reasonable: the standing rule is keep-and-index-everything, and missing the
+will out of frugality is the worse failure. The costs:
+
+| | |
+|---|---|
+| Disk | store is ~2–3× ingested bytes → **120–185 GiB [unmeasured]** against **508 GiB free** on NVMe |
+| Staging | one file at a time, copy removed after a verified import → **~2.1 GiB peak**, not 61 |
+| Time | **unknown** until the first real import is measured |
+| **Usability** | **the deciding factor — below** |
+
+Those 75 files are backup **generations** of overlapping mailboxes, not 75 distinct mailboxes. So it
+hinges on whether the app deduplicates messages across sources: dedupe and you get completeness;
+don't, and the family gets ten copies of every email — reproducing, inside the tool meant to fix it,
+exactly the duplicate clutter that motivated the project.
+
+`dedup-experiment.sh` settles it with two 63 MB archive mailboxes from different backup dates
+(different SHA-256, overlapping content). It measures from the database and asks the question
+directly — *is any single message now present more than once?* — rather than inferring from row
+deltas, which cannot distinguish "deduplicated" from "B had little new content". The
+message-identity column is discovered from `information_schema`, not guessed.
+
+If the answer is no, the fallback is not to abandon completeness immediately: re-test with **"Merge
+into existing ingestion"** checked, since that option plausibly exists for exactly this case.
 
 ---
 
