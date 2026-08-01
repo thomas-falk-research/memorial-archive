@@ -17,6 +17,25 @@ bad()  { printf '  %s✗%s %s\n'  "$C_RED" "$C_RST" "$*"; }
 # repo_root — the directory holding the setup scripts (the parent of ci/).
 repo_root() { cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd; }
 
+# all_shell_scripts — every shell script in the repo, one per line, from repo root.
+#
+# This used to be the literal glob `*.sh ci/*.sh`, which silently excluded every script in a
+# subdirectory — including openarchiver/verify-openarchiver.sh and openarchiver/stage-mailbox.sh,
+# the two tools that stand between a master mailbox and an app we do not fully trust. The most
+# safety-critical code in the repo was the only code CI never parsed or linted. Enumerating from
+# git (with a filesystem fallback for a tarball checkout) means a new subdirectory is covered the
+# day it appears, rather than the day someone remembers to extend a glob.
+all_shell_scripts() {
+  local root; root="$(repo_root)"
+  ( cd "$root" || return 1
+    if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      git ls-files '*.sh'
+    else
+      find . -name '*.sh' -type f -not -path './.git/*' | sed 's|^\./||'
+    fi | sort
+  )
+}
+
 # extract_embedded_commands <destdir>
 # Each setup script installs its commands with `sudo tee /usr/local/bin/<cmd> >/dev/null <<'SCRIPT'
 # ... SCRIPT`. The outer shellcheck sees that heredoc as opaque text, so the (often large) command

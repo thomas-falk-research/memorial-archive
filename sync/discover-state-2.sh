@@ -42,6 +42,7 @@ fi
 
 sep "OCR SCOPE: image files in the recoll-indexed tree (incoming/recovered/.derived; images/ is skipped)"
 PLDB="$ARC/.plocate.db"
+# shellcheck disable=SC2016  # this is an awk program; $0/$1 are awk fields, not shell variables
 bucket_awk='
   index($0, arc"/")==1 {
     rest=substr($0, length(arc)+2); split(rest, a, "/"); top=a[1];

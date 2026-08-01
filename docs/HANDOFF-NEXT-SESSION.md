@@ -33,8 +33,22 @@ ssh -N -L 8931:127.0.0.1:3010 tom@archive-pc      # then http://127.0.0.1:8931
 Currently imported: 1,222 messages (2 synthetic + two 63 MB test auto-archives).
 
 ### ⚠ Do this before importing anything real
-`sudo cp /srv/apps/openarchiver/.env` **off the box**. `ENCRYPTION_KEY` and `STORAGE_ENCRYPTION_KEY`
-cannot be regenerated; without them the stored mail is unreadable. I do not believe this has been done.
+Get `/srv/apps/openarchiver/.env` **off the box**. `ENCRYPTION_KEY` and `STORAGE_ENCRYPTION_KEY`
+cannot be regenerated; without them the stored mail is unreadable.
+
+**This is no longer a trust-me step.** `openarchiver/backup-env.sh` fingerprints the live `.env`
+(digests only — it never prints a secret, so its output is safe to paste off the box), hands you the
+exact fetch command, and then *verifies the copy that actually arrived*:
+
+```bash
+bash openarchiver/backup-env.sh                 # on the box: digest + copy-paste fetch command
+bash openarchiver/backup-env.sh verify ~/openarchiver-env-backup.txt --expect DIGEST
+```
+
+It exists because the usual failure is silent: `ssh HOST 'sudo cat ...' > file` leaves a **zero-byte
+file** when sudo cannot prompt, and "the file is there" passes on that. With no reference to compare
+against it reports **UNVERIFIED and exits non-zero** rather than implying the backup is good.
+Drilled in both directions by `ci/openarchiver-env-guard.sh` (22 cases).
 
 ---
 
@@ -75,7 +89,13 @@ staged at `/srv/apps/openarchiver/import/Law.biz.pst`, not yet imported.
 
 ```bash
 cd ~/memorial-archive
-git pull --ff-only origin claude/memorial-archive-handoff-7hsrut
+git checkout main && git pull --ff-only origin main      # PR #50 is merged; main is the source of truth
+
+# 0. PROVE the secrets are off the box before importing anything real. This is a hard gate:
+#    ENCRYPTION_KEY and STORAGE_ENCRYPTION_KEY cannot be regenerated, and every message
+#    imported before they are safe is a message lost if this box dies.
+bash openarchiver/backup-env.sh                          # prints the digest + the exact fetch command
+bash openarchiver/backup-env.sh verify ~/openarchiver-env-backup.txt --expect DIGEST
 
 # 1. Import the already-staged law mailbox — the highest-probability target AND the
 #    OCR-heavy timing measurement. In the UI: PST Import / Local Path / /import/Law.biz.pst
@@ -108,7 +128,8 @@ fragments last (unnamed, possibly truncated, expect failures).
 2. **OCR-heavy throughput** — see the caveat above.
 3. **Whether `archive-backup` covers this app.** It has bespoke exporters for Paperless and Docmost;
    Open Archiver has none. Its store is derived (rebuildable from the masters), so this is not urgent —
-   but the `.env` secrets are not, and must be backed up by hand.
+   but the `.env` secrets are not. They still have to be copied off by hand; what is no longer manual
+   is *checking that the copy is real* — `openarchiver/backup-env.sh verify`.
 4. **A batch import driver.** 75 mailboxes via the UI is 75 manual dialogs. The DB has an `api_keys`
    table and the source has ingestion routes, so it is very likely scriptable: stage → import →
    verify → free the copy → next, resumable, with a memory floor. Not built; confirm the endpoints

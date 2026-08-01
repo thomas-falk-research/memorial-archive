@@ -23,9 +23,15 @@ printf 'using %s\n' "$(shellcheck --version | awk '/version:/{print "shellcheck 
 
 rc=0
 hdr "shellcheck -S $sev — outer scripts"
-for f in *.sh ci/*.sh; do
+mapfile -t SCRIPTS < <(all_shell_scripts)
+if (( ${#SCRIPTS[@]} == 0 )); then
+  bad "no shell scripts found — the enumerator is broken, and this gate would pass on nothing"
+  exit 1
+fi
+for f in "${SCRIPTS[@]}"; do
   if out=$(shellcheck -S "$sev" "$f" 2>&1); then ok "$f"; else bad "$f"; printf '%s\n' "$out"; rc=1; fi
 done
+printf '%s(%d scripts checked)%s\n' "$C_CYN" "${#SCRIPTS[@]}" "$C_RST"
 
 hdr "shellcheck -S $sev — embedded installed-command bodies"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT

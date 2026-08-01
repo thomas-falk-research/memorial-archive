@@ -114,7 +114,9 @@ case "$cmd" in
     ;;
 
   embed)
-    [ -d "$PARSED" ] && [ -n "$(find "$PARSED" -name '*.json' 2>/dev/null | head -1)" ] || die "nothing parsed; run: $0 parse --go"
+    if [ ! -d "$PARSED" ] || [ -z "$(find "$PARSED" -name '*.json' 2>/dev/null | head -1)" ]; then
+      die "nothing parsed; run: $0 parse --go"
+    fi
     [ -x "$PY" ] || die "venv missing; run: $0 setup --go"
     say "${c_b}=== embed parsed text with BGE-M3 -> Milvus Lite ($DB) ===${c_0}"
     [ "$GO" = 1 ] || { say "DRY-RUN. Would embed $(find "$PARSED" -name '*.json' | wc -l) docs into $DB. Re-run with --go."; exit 0; }
@@ -157,7 +159,15 @@ case "$cmd" in
     say "does NOT touch $ARCHIVE_ROOT or the recoll index."
     [ "$GO" = 1 ] || { say; say "DRY-RUN. Re-run with --go to delete."; exit 0; }
     assert_safe_home
-    [ -d "$RAG_HOME" ] && rm -rf "$RAG_HOME" && ok "removed $RAG_HOME" || say "(nothing to remove)"
+    # Not `A && B && C || D`: that reports "(nothing to remove)" when the rm FAILS, which is a
+    # deletion silently mistaken for a no-op. A teardown that cannot delete must say so.
+    if [ ! -d "$RAG_HOME" ]; then
+      say "(nothing to remove)"
+    elif rm -rf "$RAG_HOME"; then
+      ok "removed $RAG_HOME"
+    else
+      die "could not remove $RAG_HOME — it is still there. Check permissions before re-running."
+    fi
     ;;
 
   *)

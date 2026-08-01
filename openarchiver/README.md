@@ -18,6 +18,10 @@ bash archive-openarchiver-setup.sh
 # 2. prove it is safe BEFORE any family mail
 bash openarchiver/verify-openarchiver.sh all
 
+# 2b. get the secrets off the box, and PROVE the copy arrived — before any large import
+bash openarchiver/backup-env.sh
+bash openarchiver/backup-env.sh verify ~/openarchiver-env-backup.txt --expect DIGEST
+
 # 3. stage a COPY of a real mailbox (never the master)
 bash openarchiver/stage-mailbox.sh "/srv/archive/incoming/.../Outlook MKH.pst"        # dry-run
 bash openarchiver/stage-mailbox.sh "/srv/archive/incoming/.../Outlook MKH.pst" --go
@@ -38,6 +42,39 @@ bash openarchiver/verify-openarchiver.sh source
 Each gate is tested in **both** directions — a gate that cannot fail is not evidence. If a gate cannot
 demonstrate its property it reports **UNPROVEN and exits non-zero** rather than defaulting to "probably
 fine".
+
+## `backup-env.sh` — the lockout gate, made falsifiable
+
+`ENCRYPTION_KEY` and `STORAGE_ENCRYPTION_KEY` cannot be regenerated. Lose them and every message the
+app has stored is permanently unreadable — the largest lockout risk in the stack, and it grows with
+every mailbox imported. So the backup has to happen *before* the big import, and it has to be
+**checked**, not assumed.
+
+The usual failure is silent. `ssh HOST 'sudo cat /srv/apps/openarchiver/.env' > backup.txt` leaves a
+**zero-byte file** when sudo cannot prompt for a password, and every check of the form "is the file
+there?" passes on it. This tool is built around that trap:
+
+| Mode | Does |
+|---|---|
+| `backup-env.sh` | fingerprints the live `.env` and prints the exact fetch + check commands, digest baked in |
+| `backup-env.sh verify PATH --expect DIGEST` | checks the copy that actually arrived, from anywhere |
+| `backup-env.sh verify PATH --manifest PATH` | same, off the box, using a saved digest-only manifest |
+
+- **It never prints a secret value.** Only sha256 digests, which are one-way — so the output is safe
+  to paste into a chat log or a ticket. An output guard scans the composed report for every value it
+  read and *aborts* rather than printing one, and the drill proves that guard fires.
+- **It refuses to imply success.** With no reference to compare against it reports **UNVERIFIED** and
+  exits non-zero. Structure alone cannot tell a good backup from a perfectly valid `.env` belonging
+  to a different install.
+- **It names the failure.** Zero bytes · a captured `sudo: a terminal is required` · truncated in
+  transit · rewritten to CRLF · an irreplaceable key missing, empty, or the wrong shape · a copy from
+  a different install. Each gets a specific diagnosis, because "digests differ" tells you nothing
+  about what to do next.
+- Read-only. It writes nothing except a manifest at a path you name, and refuses to overwrite that.
+
+Drilled in both directions by `ci/openarchiver-env-guard.sh` — 22 cases, each asserting the exit
+status *and* that the output names the right reason. A case that merely accepts "non-zero" would
+pass when the tool crashed for an unrelated reason, which is not evidence of anything.
 
 ## `stage-mailbox.sh` — the only sanctioned way to get real mail in
 

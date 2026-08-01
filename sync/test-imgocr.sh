@@ -95,7 +95,9 @@ if [ -n "${JPGW:-}" ]; then check "jpeg NOT OCR'd (scope holds)" no "$JPGW"; els
 check "non-image (.txt) still indexed" yes "$TEXTTOK"
 if [ -n "$realword" ]; then check "real PDF still indexed under overlay" yes "$realword"; else echo "SKIP  real-PDF (none with a text layer found)"; fi
 
-echo; echo "ocrcache (proof OCR ran & is cached):"; ls -la "$CONF/ocrcache" 2>/dev/null | sed -n '1,6p'
+echo; echo "ocrcache (proof OCR ran & is cached):"
+# shellcheck disable=SC2012  # human-facing listing, not parsed
+ls -la "$CONF/ocrcache" 2>/dev/null | sed -n '1,6p'
 echo; echo "summary: $pass passed, $fail failed"
 if [ "$fail" -eq 0 ]; then echo "OK — image OCR works, scoping holds, nothing else broke. Safe to deploy to production."
 else echo "DO NOT deploy — investigate the FAIL line(s) above first."; fi

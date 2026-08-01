@@ -47,6 +47,8 @@ done
 
 echo
 echo "Viewable files in $VIEWDIR (largest first):"
+# shellcheck disable=SC2012  # a human-facing listing sorted by size; `find` cannot sort, and this
+# output is read by a person, never parsed
 ls -laS "$VIEWDIR" 2>/dev/null | sed -n '2,60p'
 echo
 case "$VIEWDIR" in

@@ -45,10 +45,17 @@ for cd in "$HOME/.recoll" "$ARC/.recoll" /root/.recoll; do
   fi
 done
 echo "-- does this recoll build ship an image-OCR filter? --"
-ls /usr/share/recoll/filters 2>/dev/null | grep -iE 'ocr|tesseract' || echo "(no ocr filter script found under /usr/share/recoll/filters)"
+found_ocr_filter=0
+for _f in /usr/share/recoll/filters/*[Oo][Cc][Rr]* /usr/share/recoll/filters/*[Tt][Ee][Ss][Ss][Ee][Rr][Aa][Cc][Tt]*; do
+  [ -e "$_f" ] || continue
+  basename "$_f"; found_ocr_filter=1
+done
+[ "$found_ocr_filter" -eq 1 ] || echo "(no ocr filter script found under /usr/share/recoll/filters)"
 command -v tesseract >/dev/null && echo "tesseract: $(tesseract --version 2>&1 | head -1)"
 
 sep "COPYPARTY (how the web root is served: volume / RO-RW / port)"
+# shellcheck disable=SC2009  # we need the FULL argv line (volume/port flags) to redact and read;
+# pgrep prints only the pattern match, which is the thing we are trying to inspect
 ps -eo args 2>/dev/null | grep -i '[c]opyparty' | redact || echo "no running copyparty process found"
 systemctl cat copyparty 2>/dev/null | grep -iE 'ExecStart|WorkingDirectory|User=' | redact || echo "(no copyparty systemd unit visible)"
 for f in /etc/copyparty.conf "$HOME/.config/copyparty/copyparty.conf" "$HOME/copyparty.conf"; do

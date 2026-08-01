@@ -466,6 +466,68 @@ into existing ingestion"** checked, since that option plausibly exists for exact
 
 ---
 
+## 7d. The lockout gate — and a hole found in our own CI while closing it
+
+Every hazard in this document so far is about the app damaging something. This one is about us
+losing the key to what the app has stored, and it is the only failure here with **no recovery
+path at all**: `ENCRYPTION_KEY` and `STORAGE_ENCRYPTION_KEY` cannot be regenerated. Lose them and
+the entire archive Open Archiver holds becomes ciphertext forever. The risk compounds with every
+mailbox imported, so the gate has to sit *before* the 75-mailbox run, not after it.
+
+Up to now this was a line of prose in the handoff — "copy the .env off the box" — with nothing
+checking it. `openarchiver/backup-env.sh` turns it into a gate.
+
+**Why the obvious check is worthless.** The natural way to fetch the file is
+
+```
+ssh HOST 'sudo cat /srv/apps/openarchiver/.env' > backup.txt
+```
+
+and the natural way it fails is *silently*: sudo needs a terminal, writes its complaint to stderr,
+and leaves a **zero-byte `backup.txt`** behind. "Does the backup exist?" passes on that. So does
+"is it non-empty?" if the shell captured the error text instead. The tool therefore requires
+content, structure, both irreplaceable keys in the right shape (64 hex characters), **and** a digest
+match against a reference — and where there is no reference it reports **UNVERIFIED and exits
+non-zero** rather than letting a structural pass be mistaken for a verified backup. A perfectly
+well-formed `.env` from a *different* install would sail through every structural check and decrypt
+nothing; only the comparison catches it.
+
+**It also has to be safe to run.** The output is meant to be pasted back off the box, so it carries
+sha256 digests only, never a value. That promise is enforced rather than intended: the report is
+composed into a buffer, scanned for every secret the tool read, and the run **aborts** if one would
+be printed. `ci/openarchiver-env-guard.sh` proves the guard *fires*, not merely that it exists —
+22 cases, each asserting the exit status **and** that the output names the right reason, since a
+case that accepts any non-zero exit would pass on an unrelated crash.
+
+### The hole this exposed
+
+Writing that drill meant asking where it would run — and the answer was that it very nearly
+wouldn't have mattered. `ci/check-syntax.sh` and `ci/shellcheck-all.sh` iterated the literal globs
+`*.sh ci/*.sh`. **Nothing in a subdirectory was ever parsed or linted.** That silently excluded
+`openarchiver/verify-openarchiver.sh` and `openarchiver/stage-mailbox.sh` — the two tools that stand
+between an irreplaceable master mailbox and an application we deliberately do not trust. The
+repo's own README stated the opposite ("no wiring is needed — the checks discover every script
+automatically"), which is what kept the gap invisible.
+
+The enumerator now comes from `git ls-files`, so a new subdirectory is covered the day it appears.
+Both gates were then re-tested in the failing direction by planting a genuine parse error and a
+genuine shellcheck violation in `openarchiver/stage-mailbox.sh` and confirming each gate fails.
+
+That re-test is worth recording for a second reason: the **first** attempt planted
+`if [ "$X" = x ; then :; fi`, which merely *looks* broken — `[` is an ordinary command, so the
+missing `]` is a runtime error and `bash -n` correctly reported no syntax error. The gate was
+exonerated by a test that had never presented it with a fault. Same lesson as every other correction
+in this document, one level further out: it is not enough to test a check in the failing direction,
+the failure you plant has to be real.
+
+Coverage went from 33 scripts to 50, and closing it cost 7 findings across five previously-unlinted
+scripts. One was a genuine defect rather than a style point: `rag-pilot/run.sh`'s teardown ran
+`[ -d "$H" ] && rm -rf "$H" && ok || say "(nothing to remove)"`, which reports **"nothing to remove"
+when the delete fails** — a failed deletion presented as a no-op, in a repo whose first rule is that
+things fail loudly.
+
+---
+
 ## 8. Sources
 
 - LogicLabs-OU/OpenArchiver `docs/user-guides/searching.md` — from/exclude-sender, to/Cc/Bcc, mailboxes,
