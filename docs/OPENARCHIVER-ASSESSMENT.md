@@ -365,6 +365,33 @@ gate 2 a real test rather than a formality.
 
 ---
 
+## 7a. MEASURED: the first real import — 2026-08-01
+
+`archive.pst` (63 MB, the July 2013 auto-archive) imported with **0 failures**:
+
+| Metric | Measured | Replaces |
+|---|---|---|
+| Wall clock | **36 s** (`process-mailbox` 12:25:46 → 12:26:22) | "unknown until measured" |
+| Messages | **610** → ~17 messages/sec | — |
+| Throughput | **~1.75 MB/s** of PST | — |
+| Storage used | **69.52 MB total** for 63 MB of PST + the 2 synthetic messages → **~1.1×** | my 2–3× estimate |
+
+**Both of my estimates in §7b were wrong, in the same direction — too pessimistic.**
+
+- **Storage: ~1.1×, not 2–3×.** So all 61.4 GiB of distinct mailboxes lands at roughly **68 GiB**, not
+  120–185 GiB. Against 508 GiB free, that is comfortable rather than tight.
+- **Time: ~10 hours for everything**, extrapolating 1.75 MB/s across 61.4 GiB — an overnight job, not
+  the days-to-weeks I warned about.
+
+**The caveat that could still make this wrong.** `archive.pst` is an *auto-archive of old mail* and
+appears text-heavy. OCR is the expensive operation: the RAG bench measured **1–3 s per scanned page**,
+against ~17 messages/sec here. A mailbox thick with faxed scans could run an order of magnitude slower.
+So treat ~10 hours as the **floor**, and re-measure on the first attachment-heavy mailbox (`Law.biz.pst`
+or `historical.pst`) before assuming the whole corpus fits an overnight window.
+
+Even at 10× that floor it is a long weekend, not a month — so **importing all 75 is affordable**, and the
+remaining question is purely whether duplicates make it *useful* (§7b).
+
 ## 7b. Deciding whether to import all 75 mailboxes
 
 The archive holds **102 PST files, 74.4 GiB → 75 distinct, 61.4 GiB** (`inventory-mailboxes.sh`).
