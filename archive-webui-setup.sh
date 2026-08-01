@@ -221,4 +221,9 @@ cat <<EOF
       - After new ingests, run 'archive-index' so results stay current (the web UI updates live).
       - Change the password: sudo caddy hash-password ; edit ${CADDYFILE} ; sudo systemctl reload caddy
 EOF
-[[ -n "${GEN_PW:-}" ]] && warn "The generated password above is shown only once. Save it now."
+# NOT a trailing `[[ ... ]] && warn` — as the last command of the script that makes a successful
+# run WITHOUT a generated password exit 1, which reads as a failure to every caller.
+if [[ -n "${GEN_PW:-}" ]]; then
+  warn "The generated password above is shown only once. Save it now."
+fi
+exit 0

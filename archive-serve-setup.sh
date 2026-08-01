@@ -186,4 +186,9 @@ cat <<EOF
       - If "smb://${host_short}.local" doesn't resolve on a device, use the LAN IP shown above.
       - Re-run archive-index after new ingests so search stays current (see archive-search-setup.sh).
 EOF
-[[ -n "$GENERATED_PW" ]] && warn "The generated password above is shown only once. Save it now."
+# NOT a trailing `[[ ... ]] && warn` — as the last command of the script that makes a successful
+# run WITHOUT a generated password exit 1, which reads as a failure to every caller.
+if [[ -n "$GENERATED_PW" ]]; then
+  warn "The generated password above is shown only once. Save it now."
+fi
+exit 0

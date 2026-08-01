@@ -14,6 +14,7 @@ fail=0
 python3 "$here/validate-compose.py" || fail=1
 # Dynamic drills — each self-skips cleanly when its tools (rsync / restic / recoll+tesseract) are
 # absent, so this stays a one-command local "run everything".
+"$here/paperless-upgrade-guard.sh" || fail=1
 "$here/backup-roundtrip.sh" || fail=1
 "$here/restic-roundtrip.sh" || fail=1
 "$here/search-roundtrip.sh" || fail=1

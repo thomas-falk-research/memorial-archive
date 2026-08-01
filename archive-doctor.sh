@@ -293,7 +293,7 @@ hdr "Family apps"
 if ! have ss; then
   note "Can't check service ports ('ss' not found)."
 else
-  for entry in "Immich:2283:immich" "Paperless:8000:paperless" "Files (copyparty):3923:copyparty" "Duplicates (czkawka):5800:czkawka" "PDF tools (Stirling):8082:stirling" "Notes (Docmost):3000:docmost" "PC backups (Kopia):51515:kopia"; do
+  for entry in "Immich:2283:immich" "Paperless:8000:paperless" "Files (copyparty):3923:copyparty" "Duplicates (czkawka):5800:czkawka" "PDF tools (Stirling):8082:stirling" "Notes (Docmost):3000:docmost" "Mail archive (Open Archiver):3010:openarchiver" "PC backups (Kopia):51515:kopia"; do
     nm="${entry%%:*}"; rest="${entry#*:}"; port="${rest%%:*}"; dir="${rest#*:}"
     listening "$port"; lp=$?
     if   [[ $lp -eq 0 ]]; then ok "${nm} is responding on :${port}."
@@ -387,7 +387,7 @@ fi
 # ---- 9b. family app data backup (their DB/tags/uploads live outside the archive) -------------
 hdr "App data backup"
 app_inst=false
-for _d in immich paperless docmost; do [[ -d "$APPS_ROOT/$_d" ]] && app_inst=true; done
+for _d in immich paperless docmost openarchiver; do [[ -d "$APPS_ROOT/$_d" ]] && app_inst=true; done
 if [[ "$app_inst" != true ]]; then
   note "No family apps installed (optional) — nothing extra to back up."
 elif [[ -d "$BACKUP_ROOT" ]] && is_sep_mount "$BACKUP_ROOT"; then

@@ -1,0 +1,319 @@
+# Revision to the RAG design — replace Docling with **xberg / Kreuzberg** as the extraction tier
+
+**Status:** design revision. **No install.** Amends `docs/RAG-HYBRID-SEARCH-FEASIBILITY.md` §2, §5, §7.
+Nothing here touches masters, the recoll index, or the running family services.
+
+**Date:** 2026-07-27 · Companion to the original assessment; same rule — every unmeasured number is
+marked **[unmeasured]**, and vendor-published numbers are labelled as such.
+
+---
+
+## 1. Bottom line
+
+**Swap the parser. Keep everything else.** The original design named Docling as the extraction tier and
+then spent half a page apologising for it: a broken `document_timeout` that hangs forever on
+pathological PDFs, a batch memory leak, ~1 GB of Python dependencies, a PyTorch requirement, and
+throughput numbers that were all measured with **OCR off** — on a corpus that is mostly scans.
+
+xberg (the Rust successor to Kreuzberg) removes those problems rather than mitigating them, and it
+brings one capability Docling never had that matters more here than any benchmark:
+
+> **It reads PST, MSG, EML and ZIP/TAR/7Z natively, and extracts recursively** — mailbox → message →
+> attachment → the scan inside it. That is precisely the shape of the thing we have been hunting for
+> months: John Sr.'s will, trust and death certificate exist as **faxed scans attached to email**.
+
+That single fact justifies the change on its own. The performance and footprint gains are a bonus.
+
+**Recommended architecture change:**
+
+```
+  before:  scanned-PDF subset ──► Docling (torch, pypdfium, external timeout) ──► chunk ──► BGE-M3 ──► Milvus Lite
+  after:   PST / EML / PDF / TIFF ──► xberg (Rust, PDFium, Tesseract) ──► chunk ──► BGE-M3 ──► Milvus Lite
+                                        └─ recursive: attachments, archives, embedded images
+```
+
+**But it is not a free lunch, and §4 is the part to read before agreeing.** The ecosystem is mid-rebrand
+and mid-release; picking a version is a real decision, not a formality.
+
+---
+
+## 2. What the swap actually buys
+
+| | Docling (original pick) | xberg / Kreuzberg |
+|---|---|---|
+| Core | Python + **PyTorch** | **Rust** (PDFium text extraction, ONNX Runtime, Rayon parallelism) |
+| Install footprint | **~1,032 MB**, heavy dep tree | **~71 MB, ~20 deps** (vendor-published) |
+| Parse-stage RAM | ~2.4 GB peak (pypdfium) / 6.16 GB (native) | **276 MiB peak — MEASURED on archive-pc, 2026-07-27** (~9–22x lighter) |
+| Hang risk | **`document_timeout` is broken** (issue #2381): >1 hr hangs, un-interruptible | no equivalent known defect; we keep the OS-level timeout anyway |
+| Memory leak | **batch leak** (issue #2788) → must restart workers between batches | not applicable |
+| Throughput | slow on CPU; *every* published figure was **OCR-off** | **MEASURED: 0.33 s/file mean, 3.0 files/s, OCR ON** (vendor claimed 35+/s) |
+| **Mailbox formats** | ✗ | **PST, MSG, EML — with recursive attachment extraction** |
+| **Archive formats** | ✗ | ZIP, TAR, 7Z, recursive |
+| **Fax/scan formats** | PDF-centric | TIFF, **JBIG2** (the fax codec), HEIC, JPEG2000, WebP, SVG |
+| Office formats | limited | Word/Excel/PowerPoint/ODF/**HWP**/EPUB — no Tika, no Gotenberg |
+| Dedup | none | **content-hash cache** — re-extraction is skipped automatically |
+| Interfaces | Python library | Rust lib, **Python**, CLI, REST server, **MCP server**, Docker |
+
+**Caveat, stated plainly:** the speed and footprint figures are the project's **own** benchmarks, and I
+could not find an independent replication. Treat them as a hypothesis. What is *architecturally*
+verifiable — Rust core, PDFium, ONNX instead of PyTorch, 20 deps instead of a torch tree — is enough to
+justify the pilot on its own, and our own assessment already independently found Docling-class CPU
+parsing to be 15–20 min/doc for the small VLM variant. The two stories are consistent.
+
+### The knock-on win: PyTorch may disappear entirely
+
+The original pilot budgeted **~3–5 GB** for a venv, mostly CPU torch, because both Docling *and* BGE-M3
+needed it. With xberg the parse stage needs no torch at all, and xberg additionally offers **local ONNX
+embeddings**. If an ONNX embedder can produce what the hybrid store needs (dense **plus** sparse), the
+entire stack becomes Rust + ONNX with **no PyTorch anywhere** — a different order of resource cost on a
+box whose binding constraint is RAM.
+
+**Open question (§6):** whether BGE-M3's *sparse* vectors are available through xberg's ONNX path. If
+not, keep BGE-M3 on torch for the embed stage only — still a large win, since parse and embed already
+run as separate, never-co-resident processes.
+
+---
+
+## 2a. MEASURED on archive-pc — 2026-07-27
+
+The assessment's two biggest unknowns are now numbers, taken on the real box against the real corpus
+with OCR **on** (`probe-extractor-capability.sh bench 20`, 20 files, 10.4 MiB):
+
+| Metric | Measured | What it replaces |
+|---|---|---|
+| **Peak RSS** | **276 MiB** | Docling's ~2.4 GB (pypdfium) / 6.16 GB (native) — **9–22x lighter** |
+| Mean per file | **0.33 s** | granite-docling's 15–20 min/doc on CPU |
+| Throughput | 3.0 files/s · 1.56 MiB/s | — |
+| Slowest in sample | 3.4 s (a born-digital PDF) | — |
+| OCR on real scans | **works** — 293 / 74 / 86 words from three real scans | the gate's uncovered case |
+
+**What the RAM figure changes:** the entire "never hold two heavy stages resident" anxiety in the
+original assessment was written around a 2.4–6.16 GB parser. At **276 MiB** the parse stage is no longer
+a memory event at all — it is smaller than Immich's Redis. Parsing can run alongside the family services
+without the elaborate sequencing the original design required, and could even be parallelised across a
+few cores if throughput ever matters.
+
+**Honest reading of the throughput number.** The 0.33 s mean is dragged down by born-digital files that
+need no OCR; the genuinely OCR'd scans in the `ocr` run took **0.37 s, 1.18 s and 2.15 s**. Budget
+**~1–3 s per scanned page**, not 0.33 s. On that basis a 40k-scan corpus is roughly **11–33 hours
+single-threaded** — an overnight-to-weekend job, and parallelisable — versus the *weeks* Docling implied.
+The sample is 20 files and skewed by whatever the filename index returned first; re-measure on the
+actual selected corpus before committing to a full run.
+
+**A corpus-selection finding, free from the sample.** The auto-picker's first hit was a **browser
+screenshot** (Firefox chrome OCR'd as "File Edit View History Bookmarks"), and two of three were
+`.jpeg`/`.png` under `MKH Clients/`. Two consequences: (a) the scan-vs-photo/screenshot problem is real
+and needs a filter, exactly as the Paperless design note found; (b) **the picker has no notion of whose
+documents these are** — it surfaced client files. Selection for the real corpus must be scoped
+deliberately, per the standing rule about third parties' private material.
+
+---
+
+## 3. What this changes about the corpus — and the will hunt
+
+The original Phase-1 pilot was "a few hundred scanned PDFs". With native mailbox support, the obvious
+first target changes:
+
+**Point it at `Outlook MKH.pst` (1.67 GB) directly** — read-only, from a copy — and let it walk every
+message, every attachment, and every image inside those attachments, OCR'ing as it goes. That is the
+prime remaining place the estate documents can be hiding, and it is exactly the traversal that
+`FaxImage.tif` / `image001.gif` / `SKM_*.pdf` attachments have so far survived by being meaninglessly
+named. Search is by *content*, so a meaningless filename stops mattering.
+
+This does not replace recoll (which already indexes the extracted PST) — it adds semantic retrieval over
+the same material, and it re-walks the attachment tree with a different extractor, which is itself a
+second opinion on a corpus we have failed to crack twice.
+
+**Standing rule unchanged:** third parties' private documents (the cousins' material) stay out of scope —
+extraction is pointed at our own sources, not the whole tree.
+
+---
+
+## 4. Maturity, licensing, and the version decision — read this before agreeing
+
+This is where the honest reservations live.
+
+1. **The project is mid-rebrand.** Kreuzberg → xberg is "the next iteration … rebuilt and rebranded under
+   a fresh v1 line". The canonical Python package is still **`kreuzberg`**; `xberg` on PyPI is currently
+   an **alias package**.
+2. **It is mid-release, right now.** PyPI shows **1.0.0rc8 → 1.0.0rc42 published between 5 and 27 July
+   2026** — 34 release candidates in three weeks, the most recent **today**. A 1.0.0 final looks
+   imminent, which argues for waiting days, not weeks.
+3. **The GitHub README says MIT; the PyPI `xberg` alias package says Elastic-2.0.** The v4 LTS repo is
+   explicitly MIT. This is most likely stale metadata on a placeholder package, but **the licence must be
+   confirmed from the actual artifact we install**, not from a README.
+4. **`pip install xberg` does not install xberg.** Its only *stable* PyPI release is the **0.1.0
+   placeholder alias**; the real code ships as `1.0.0rc8…rc42` pre-releases, which **pip ignores unless
+   you pass `--pre`**. Installing the bare name yields a package that imports but extracts nothing — and
+   would sail through a naive egress test by doing nothing at all, twice. The verification script pins a
+   version, adds `--pre` automatically for release-candidate pins, and **refuses to certify a package
+   with no extraction entry point**.
+5. **Kreuzberg v4 is not as legacy as its "LTS" label suggests.** Despite being described as superseded,
+   **4.10.0, 4.10.1 and 4.10.2 all shipped on 11–12 July 2026** — two weeks ago. It is MIT, publishes a
+   `manylinux_2_28_x86_64` wheel, and has a `tesseract` extra for the local OCR backend. That makes the
+   "conservative" option a genuinely current one rather than a compromise.
+
+**How much does this churn actually matter?** Less than it would anywhere else in this archive, and it is
+worth being precise about why:
+
+> The extraction pipeline is **read-only and derived**. It reads copies, writes only into its own area on
+> the NVMe, and never opens the recoll index or a master. If the library breaks, regresses, or gets
+> renamed again, the cost is **re-running an extraction** — wasted CPU time, not lost data. That is a
+> categorically different risk from the Paperless ingest we just stepped back from, where the tool
+> *deletes* what it consumes.
+
+So the maturity risk is real but bounded, and it argues for one design rule rather than for waiting:
+
+> **Treat the extractor as a swappable stage.** The pilot already has the right seam — `parse_one.py SRC
+> OUT.json`, one process per file under an OS-level timeout. Keep that contract, add an xberg
+> implementation beside the Docling one, and the choice of engine becomes a one-line change instead of a
+> commitment.
+
+**Recommendation (revised after checking PyPI):** start on **`kreuzberg[tesseract]==4.10.2`** — canonical
+package, MIT, current, real wheel, local OCR — and move to **xberg 1.0.0** once it goes final. This gets
+measurements this week on a stable artifact instead of waiting on a release candidate, and because the
+extractor is a swappable stage the move costs one line later. Record the exact pin; do **not** float the
+version — same discipline as every other pin in this repo.
+
+*Note on capability while pinned to v4:* the mailbox/recursive-archive reach described in §3 is
+advertised for the **xberg (v5) line**. Confirm which of PST/MSG/EML the pinned v4 build actually handles
+before Phase 2 depends on it — if the answer is "not PST", that alone is the argument for taking the rc.
+
+---
+
+## 5. Safety verification — what I confirmed, and the gate that is still open
+
+A document-intelligence library that advertises "143+ LLM providers", cloud VLM OCR and remote embedding
+APIs deserves exactly the scrutiny this archive's rules demand. What the documentation establishes:
+
+| Check | Finding |
+|---|---|
+| Default OCR backend | **Tesseract, fully local.** No network path in the default configuration. ✅ |
+| Cloud / VLM OCR (GPT-4V, Claude Vision, Gemini) | **Strictly opt-in** — inert unless you configure a model *and* supply an API key. ✅ |
+| Remote embedding APIs | Same: opt-in, key-gated. Local ONNX is the alternative. ✅ |
+| PaddleOCR / ONNX model weights | **Downloaded automatically on first use**, then cached locally. ⚠ First run needs network; documented air-gapped pre-fetch **not found**. |
+| Telemetry / observability | Ships **as a module**; whether anything is enabled by default is **NOT documented and NOT confirmed**. ⛔ |
+
+**The blocking gate: nothing points at a single family document until we have proven the extractor makes
+no outbound connection.** Model weights downloading once is acceptable; a document — or a hash, or a
+filename, or a "usage event" — leaving this box is not, ever.
+
+The test is written: `rag-pilot/verify-xberg-offline.sh` installs the pinned version into a throwaway
+venv on the NVMe, extracts **synthetic** documents it generates itself, and then re-runs the identical
+extraction **with no network at all**. Byte-identical results prove the library needs no egress at
+runtime.
+
+Getting "no network at all" on this box needed three methods, because **Ubuntu 23.10+ blocks
+unprivileged user namespaces by AppArmor default** — the clean `unshare -rn` is simply denied on stock
+24.04 (confirmed on archive-pc). In descending order of strength:
+
+| Method | What it does | Needs |
+|---|---|---|
+| **A** `unshare -rn` | removes the network entirely — prevention | nothing (blocked on stock 24.04) |
+| **B** `sudo unshare -n` + `setpriv` back to the user | same prevention; root only creates the namespace, the extractor still runs unprivileged and leaves no root-owned files | sudo (`--sudo-netns`) |
+| **C** `strace -e trace=network` | *observes* every `connect()`; flags any non-loopback `AF_INET` | strace |
+
+A and B **prove** it; C is strong evidence from one observed run and says so rather than overclaiming.
+If none is available the script reports **UNPROVEN** and exits non-zero — it never defaults to "probably
+fine". Both failure paths are tested: with a deliberately phoning-home stub extractor, method C catches
+the `connect()` to 1.1.1.1 and refuses to certify.
+
+The script also separates telemetry-string matches in **source** from those in compiled `.so`/SBOM
+artifacts (onnxruntime carries platform tracing hooks it never activates on Linux — lumping them in
+produces a scary warning that means nothing), and reports any environment variable that could enable a
+remote backend. Only after a clean verdict does anything real get parsed.
+
+**Result on archive-pc (2026-07-27): PROVEN**, via method B — extraction is byte-identical with the
+network removed, so the extractor requires no outbound connection at runtime. Installed licence
+confirmed **MIT** for `kreuzberg 4.10.2`, settling §4.3: the Elastic-2.0 metadata belongs to the
+placeholder alias package, not the real library. **Family documents may now go through this extractor.**
+
+One scope limit on that verdict, stated so it is not over-read: the gate exercised text/eml/csv/pdf. The
+**OCR path was not exercised**, because it needs a real scan — that is the first thing
+`probe-extractor-capability.sh ocr` does, and a `--netns` option carries the same prevention over to
+every real-data run as free insurance.
+
+**And the verdict does not transfer.** It certifies `kreuzberg==4.10.2` and nothing else. If we take the
+xberg v5 release candidate for native PST (§4), the egress gate must be re-run against that build first —
+a different package is a different set of network behaviours.
+
+---
+
+## 6. Revised open questions — to be measured on *this* box
+
+Replacing the original assessment's parser questions:
+
+1. ~~**xberg OCR-on throughput**~~ — **ANSWERED (§2a): ~1–3 s per OCR'd scan, 0.33 s/file mixed mean.**
+   Still to re-measure on the actual selected corpus, which will be scan-heavier than the sample.
+2. ~~**Peak RSS during extraction**~~ — **ANSWERED (§2a): 276 MiB.** Still untested against the worst
+   inputs we own (large multi-page TIFF faxes, the 1.67 GB mailbox).
+3. **PST traversal correctness** — does it enumerate every message and attachment, and does the recursive
+   image extraction actually reach the fax scans? Cross-check the count against our existing PST extraction.
+4. **Does the ONNX embedding path emit sparse vectors** (BGE-M3-equivalent), i.e. can PyTorch leave the
+   box entirely? (§2)
+5. **Telemetry/egress: zero** (§5) — a gate, not a measurement.
+6. **Licence of the actual installed artifact** (§4.3).
+
+Carried over unchanged from the original assessment: generation tok/s on AVX2-without-AVX-512, reranker
+cold-load latency, and Milvus Lite's real footprint.
+
+---
+
+## 7. Revised phased plan
+
+> **Phase-2 route decided (2026-07-27).** Upstream v4 docs confirm a **dedicated email extractor for
+> EML and MSG**; PST/OST/mbox are not listed for v4 and belong to the xberg v5 line. Since **MKH's PST is
+> already extracted to `.derived`**, the mailbox phase runs on the pinned, MIT, egress-PROVEN v4.10.2 by
+> feeding the extracted mail — same messages, same attachments, **no release-candidate dependency and no
+> second security gate**. Native PST would only save re-walking a tree we have already walked. Revisit
+> only if the extracted-mail route turns out to be lossy.
+
+| Phase | What | Gate |
+|---|---|---|
+| **0** | **Egress/telemetry verification** on synthetic data, network-namespace test (§5) | ← **do this first, always** |
+| **1** | Extract a few hundred real scanned PDFs; measure sec/page, peak RAM, quality vs recoll | phase 0 clean |
+| **2** | **Point it at the PST** — recursive attachment + image extraction, OCR on. Compare the attachment inventory against our existing extraction | phase 1 measured |
+| **3** | Embed (BGE-M3 or ONNX) → Milvus Lite → hybrid queries, including the estate-specific terms | phase 2 useful |
+| **4** | Decide full-corpus scope and let it churn overnight/over days, memory-budgeted | measured, reviewed |
+
+Every phase reads copies, writes only under `RAG_HOME` on the NVMe, and is deleted by
+`run.sh teardown --go`. recoll, Immich, copyparty and the masters are untouched throughout.
+
+---
+
+## 8. What happens to the Paperless work
+
+Parked, not deleted — `docs/PAPERLESS-DOCUMENT-VIEW.md` stands as the design if the family ever wants a
+curated document shelf. Your instinct on the trade was right: Paperless demands per-document curation
+labour and a **delete-on-consume** ingest, for a payoff that is organisational; this pipeline is
+read-only, needs no curation, and gets *more* valuable as it is pointed at more material.
+
+**The version guard that landed alongside it stays, and is worth keeping regardless** — it protects the
+Paperless install that already exists on the box from an unattended v2→v3 migration that would blank its
+database. That hazard is independent of whether we ever feed it another document.
+
+---
+
+## 9. Sources
+
+- xberg README (xberg-io/xberg) — Rust engine, 98 formats incl. PST/MSG/EML and ZIP/TAR/7Z recursive
+  extraction, TIFF/JBIG2/HEIC, OCR backends (Tesseract native FFI, PaddleOCR ONNX, Candle, opt-in VLM),
+  local ONNX embeddings, CLI/REST/MCP/Docker, 15 language bindings; 8.7k stars, 7,679 commits, 7 open issues
+- PyPI `xberg` — only stable release is **0.1.0** (a placeholder alias); real code published as
+  1.0.0rc8 … rc42, 5–27 July 2026, i.e. **pre-releases pip skips by default**; metadata declares
+  Elastic-2.0 (**conflicts with the README's MIT — verify at install**)
+- PyPI `kreuzberg` — latest stable **4.10.2 (12 July 2026)**, MIT, `manylinux_2_28_x86_64` wheel,
+  extras `tesseract` / `easyocr` / `all`; a 5.0.0rc3 also exists
+- kreuzberg-dev/kreuzberg-lts — "Kreuzberg v4 LTS … legacy; superseded by xberg for v5+. MIT-licensed";
+  critical fixes to end of 2026, best-effort
+- docs.kreuzberg.dev `/guides/ocr/` — Tesseract is the default backend and runs fully locally; PaddleOCR
+  ONNX models auto-download on first use and cache; **cloud/VLM backends require explicit configuration
+  and an API key**
+- Kreuzberg vendor benchmarks (Medium/DEV) — 35+ files/sec, ~71 MB / 20 deps vs Docling ~1,032 MB,
+  Rust + PDFium + ONNX + Rayon; **self-published, not independently replicated**
+- `docs/RAG-HYBRID-SEARCH-FEASIBILITY.md` (this repo) — Docling issues #2381 (broken `document_timeout`)
+  and #2788 (batch memory leak); granite-docling 15–20 min/doc on CPU; the RAM-is-the-constraint framing
+  every choice here still bends around
+
+*Re-verify the pin, the licence, and the telemetry defaults at install time — this space is moving
+weekly, and §4 exists because it moved twice while this document was being written.*

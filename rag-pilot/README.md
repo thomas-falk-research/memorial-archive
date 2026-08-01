@@ -1,4 +1,26 @@
-# rag-pilot — Phase-1 feasibility pilot (Docling → BGE-M3 → Milvus Lite)
+# rag-pilot — Phase-1 feasibility pilot (extractor → BGE-M3 → Milvus Lite)
+
+> **Parser revision pending — read [`../docs/RAG-EXTRACTION-XBERG-ASSESSMENT.md`](../docs/RAG-EXTRACTION-XBERG-ASSESSMENT.md) first.**
+> The extraction tier is moving from **Docling** to **xberg** (the Rust successor to Kreuzberg): no
+> PyTorch, ~71 MB instead of ~1 GB of dependencies, neither of Docling's two known hazards (the broken
+> `document_timeout` hang and the batch memory leak) — and, decisively for this archive, **native PST /
+> MSG / EML and recursive attachment extraction**, which is the exact shape of the faxed will, trust and
+> death certificate we are still hunting.
+>
+> **Phase 0 is a gate, not a step:** `verify-xberg-offline.sh` must pass before the extractor sees a
+> single family document. It proves extraction is byte-identical with the network namespace removed —
+> i.e. that nothing can leave this box — using synthetic documents only.
+>
+> ```
+> bash verify-xberg-offline.sh          # show the plan, change nothing
+> bash verify-xberg-offline.sh --go     # install the pin, run both passes, print the verdict
+> bash verify-xberg-offline.sh teardown --go
+> ```
+>
+> The Docling path below still works and stays in the tree as a fallback until the pilot has produced
+> real numbers. The `parse_one.py SRC OUT.json` contract — one process per file under an OS-level
+> timeout — is the seam that makes the engine swappable, so this is a one-file change, not a rewrite.
+
 
 **Status: PLAN / REVIEW. Nothing here installs or runs until you run it with `--go`.**
 This is the smallest experiment that measures whether the RAG stack from
