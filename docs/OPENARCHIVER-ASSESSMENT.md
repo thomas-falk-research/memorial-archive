@@ -637,6 +637,38 @@ installed one, so a deliberate cutover still works and an accidental one is visi
 yes. It is worth naming the general shape: *a script that preserves the dangerous state carefully
 and rewrites the adjacent state casually is still a lockout risk.*
 
+### 3. The version pin was not actually pinning
+
+The re-run banner read **"version: v0.5.2 (pinned default for a fresh install)"** on a box that had
+been running for days. The label was the symptom; the cause was the expression that reads the
+deployed tag:
+
+```
+sed -n 's#.*open-archiver:##p' docker-compose.yml | head -1
+```
+
+It also matches the **service name** line — `  open-archiver:` — which appears first in the file and
+substitutes to an empty string. So `installed_tag` came back empty, the script concluded there was
+no install, and fell through to `FALLBACK_VERSION`.
+
+Harmless today only by coincidence: `FALLBACK_VERSION` happens to equal the deployed tag, so the
+same image deploys either way. The branch that exists to say *"already installed — no drift; use
+`--upgrade` to advance"* has **never once fired**. The day this pin is bumped in the repo while a box
+still runs the older release, a plain re-run would silently upgrade it — precisely what the pinning
+discipline exists to prevent — and would announce a fresh install while doing so. Requiring at least
+one non-space character after the colon excludes the service-name line; verified against a v0.5.2
+compose, a v0.4.1 compose (the case that would have silently upgraded), and a file with no Open
+Archiver service at all.
+
+Worth noting where this was caught: **not** by any gate, but by an operator reading a confirmation
+banner that did not match what he knew about his own box. The banner was doing the job — and it is
+the reason the same script now prints the resolved `ORIGIN`/`APP_URL` before asking.
+
+**Follow-up owed:** none of the installer's resolution logic is drilled, because the script refuses
+to run as root and so cannot be exercised in the dev sandbox. GitHub Actions runners are non-root,
+so a CI job *can* drive it end to end against stubs. That job does not exist yet, and until it does,
+this class of bug is found by reading rather than by testing.
+
 ### And the instructions were wrong
 
 The first thing attempted from the fingerprint output was

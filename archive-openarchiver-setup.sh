@@ -94,7 +94,19 @@ sudo docker info >/dev/null 2>&1 || die "Docker isn't available/running. Run pro
 # ---- Version resolution (never floats; same discipline as the Paperless guard) -----------------
 installed_tag=""
 if sudo test -f "$APP_DIR/docker-compose.yml"; then
-  installed_tag="$(sudo sed -n 's#.*open-archiver:##p' "$APP_DIR/docker-compose.yml" 2>/dev/null | head -1 | tr -d '[:space:]')"
+  # The obvious expression is wrong here. `sed -n 's#.*open-archiver:##p'` also matches the SERVICE
+  # NAME line — `  open-archiver:` — which appears FIRST in the file and yields an empty string, so
+  # head -1 returns nothing and the script concludes there is no install at all. It then falls
+  # through to FALLBACK_VERSION and reports "pinned default for a fresh install" on a box that has
+  # been running for days.
+  #
+  # Benign only by coincidence: today FALLBACK_VERSION equals the deployed tag. The day this pin is
+  # bumped while a box still runs the older release, a plain re-run would silently UPGRADE it —
+  # exactly what pinning exists to prevent, and it would announce a fresh install while doing it.
+  #
+  # Requiring at least one non-space character after the colon excludes the service-name line.
+  installed_tag="$(sudo grep -oE 'open-archiver:[^[:space:]"]+' "$APP_DIR/docker-compose.yml" 2>/dev/null \
+    | head -1 | sed 's|.*:||' | tr -d '[:space:]')"
 fi
 version_source=""
 if [[ -n "$OPENARCHIVER_VERSION" ]]; then
