@@ -55,12 +55,9 @@ IMPORTANT_KEYS="JWT_SECRET POSTGRES_PASSWORD MEILI_MASTER_KEY REDIS_PASSWORD"
 # message, an HTML login page, or half a file.
 MARKER_KEYS="NODE_ENV STORAGE_TYPE DATABASE_URL"
 
+# Only `die` prints directly. Everything else is composed into $REPORT and printed through
+# guarded_print, so that no user-facing line can bypass the secret-leak check on its way out.
 c_b=$'\033[1m'; c_r=$'\033[1;31m'; c_g=$'\033[1;32m'; c_y=$'\033[1;33m'; c_0=$'\033[0m'
-say(){ printf '%s\n' "$*"; }
-hdr(){ printf '\n%s== %s%s\n' "$c_b" "$*" "$c_0"; }
-ok(){ printf '  %sOK%s %s\n' "$c_g" "$c_0" "$*"; }
-bad(){ printf '  %sFAIL%s %s\n' "$c_r" "$c_0" "$*" >&2; }
-warn(){ printf '  %sWARN%s %s\n' "$c_y" "$c_0" "$*" >&2; }
 die(){ printf '%sFATAL%s %s\n' "$c_r" "$c_0" "$*" >&2; exit 2; }
 
 fails=0
@@ -370,6 +367,8 @@ mode_fingerprint(){
   REPORT+="$(printf "       ssh %s@%s 'sudo cat %s' > ~/openarchiver-env-backup.txt" "$who" "$host" "$ENV_FILE")"$'\n'
   REPORT+=$'\n'"  2. Immediately check what actually arrived. This compares the copy against THIS box,"$'\n'
   REPORT+="     so it catches the empty file sudo leaves behind when it cannot prompt:"$'\n'
+  # shellcheck disable=SC2016  # the $(...) is part of the command being PRINTED for the operator to
+  # paste; expanding it here would substitute this box's shell instead of theirs
   REPORT+="$(printf '       test "$(shasum -a 256 ~/openarchiver-env-backup.txt | cut -d" " -f1)" = "%s" && echo MATCH || echo MISMATCH' "$INS_SHA")"$'\n'
   REPORT+=$'\n'"     (on a Linux machine use sha256sum in place of shasum -a 256)"$'\n'
   REPORT+=$'\n'"  3. Store it somewhere that outlives this machine, and keep it as private as the"$'\n'

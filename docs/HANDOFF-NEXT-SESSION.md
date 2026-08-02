@@ -87,31 +87,69 @@ staged at `/srv/apps/openarchiver/import/Law.biz.pst`, not yet imported.
 
 ## Next actions, in order
 
+The order matters more than usual here: step 3 needs the test data that step 5 destroys, and step 6
+changes how the app is reached, so everything is verified once on the final configuration in step 7.
+
 ```bash
+# 1. SYNC — the box must be running the reviewed code
 cd ~/memorial-archive
-git checkout main && git pull --ff-only origin main      # PR #50 is merged; main is the source of truth
+git fetch origin && git checkout main && git pull --ff-only origin main
 
-# 0. PROVE the secrets are off the box before importing anything real. This is a hard gate:
-#    ENCRYPTION_KEY and STORAGE_ENCRYPTION_KEY cannot be regenerated, and every message
-#    imported before they are safe is a message lost if this box dies.
-bash openarchiver/backup-env.sh                          # prints the digest + the exact fetch command
+# 2. GROUND TRUTH — read-only, changes nothing, answers every open question in one pass
+bash openarchiver/preflight.sh
+
+# 3. CLOSE THE LOCKOUT GATE — hard blocker; ENCRYPTION_KEY / STORAGE_ENCRYPTION_KEY cannot be
+#    regenerated, and every message imported before they are safe is lost if this box dies
+bash openarchiver/backup-env.sh                      # digest + the exact fetch command
 bash openarchiver/backup-env.sh verify ~/openarchiver-env-backup.txt --expect DIGEST
+bash openarchiver/preflight.sh --env-backup-verified DIGEST     # re-checks against the LIVE file
 
-# 1. Import the already-staged law mailbox — the highest-probability target AND the
-#    OCR-heavy timing measurement. In the UI: PST Import / Local Path / /import/Law.biz.pst
-#    Preserve Original File = CHECKED   ·   Merge into existing = UNCHECKED
-#    Watch:  watch -n5 free -h   and   sudo docker compose logs -f open-archiver
+# 4. FINISH THE EXPERIMENTS — must happen BEFORE the wipe; it needs the test data
+bash openarchiver/dedup-experiment.sh check          # record the numbers
+#    then: new source -> an ALREADY-IMPORTED mailbox, "Merge into existing" CHECKED
+bash openarchiver/dedup-experiment.sh check          # count barely moves = merge dedupes
 
-# 2. Run the hunt
-#    Ratliff · "Northern Trust" · Hartigan Kenilworth · "December 5" · "small estate affidavit"
-#    with Search in INCLUDING attachment content, and a 2009 date range
+# 5. PROVE OCR ON THE FORMATS WE ARE ACTUALLY HUNTING — blocker for the real import
+bash ci/make-fixtures.sh                             # needs ImageMagick + tesseract
+bash openarchiver/verify-openarchiver.sh ocr         # import once, then search EVERY token listed
 
-# 3. Prove the app left the staged copies alone
+# 6. CLEAN SLATE (destructive — confirm first). The store is DERIVED; .env survives, so the
+#    secrets are untouched and nothing real is lost. Cleaner than fighting ENABLE_DELETION.
+cd /srv/apps/openarchiver && sudo docker compose down -v
+
+# 7. NETWORK CUTOVER + REBUILD, together — both need a restart, so verify once afterwards
+OPENARCHIVER_URL=http://mail.home bash ~/memorial-archive/archive-openarchiver-setup.sh --yes
+bash ~/memorial-archive/archive-proxy-setup.sh
+
+# 8. RE-VERIFY EVERYTHING on the final configuration
+bash openarchiver/verify-openarchiver.sh harden
+bash openarchiver/verify-openarchiver.sh egress
+bash openarchiver/verify-openarchiver.sh ocr
+bash openarchiver/preflight.sh --env-backup-verified DIGEST
+
+# 9. THE REAL IMPORT — Law.biz.pst. Highest-probability target AND the OCR-heavy timing
+#    measurement. PST Import / Local Path / /import/Law.biz.pst
+#    Preserve Original File = CHECKED   ·   Merge into existing = per step 4's answer
+#    Watch:  watch -n5 free -h   ·   sudo docker compose logs -f open-archiver
+
+# 10. THE HUNT — attachment content ON, 2009 date range
+#     Ratliff · "Northern Trust" · Hartigan Kenilworth · "December 5" · "small estate affidavit"
+
+# 11. PROVE THE APP LEFT THE MASTERS' COPIES ALONE
 bash openarchiver/verify-openarchiver.sh staged
 
-# 4. Then work down the tiers from
+# 12. Then work down the tiers
 bash openarchiver/inventory-mailboxes.sh
 ```
+
+**Step 6 is the only destructive step.** `down -v` removes the Docker volumes (Postgres, Meilisearch,
+the message store) but **not** `/srv/apps/openarchiver/.env`, so the encryption keys survive and the
+re-run reuses them. Everything currently stored is synthetic or test data. Doing it this way avoids
+temporarily re-enabling `ENABLE_DELETION` and leaves no half-deleted sources behind.
+
+**Step 7 is a cutover, not an addition.** Once `ORIGIN`/`APP_URL` point at `mail.home`, the
+`127.0.0.1:8931` SSH tunnel stops being a valid origin and logins through it will fail. Do not start
+it until preflight section G shows a real (non-link-local) LAN address.
 
 **If the hunt comes up dry in the law mailbox**, the tier order is: `historical.pst` (2.1 GB, 7
 locations) → `archive*.pst` → `personal.pst` → `Outlook MKH.pst`/`Outlook1.pst` → carved Hitachi

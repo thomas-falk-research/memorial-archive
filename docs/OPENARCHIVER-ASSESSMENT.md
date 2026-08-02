@@ -528,6 +528,73 @@ things fail loudly.
 
 ---
 
+## 7e. Gate 2 proved less than we have been quoting it for
+
+**The finding:** Gate 2 imported an image-only **PDF** and recovered a token from inside it. That is
+real evidence, and §7a reports it correctly. What has quietly happened since is that it has been
+cited as "OCR works" — and the documents we are hunting are not PDFs.
+
+From the mailbox itself, the estate attachments are `FaxImage.tif`, `image001.gif` and `SKM_*.pdf`.
+A TIFF is not a PDF: different container, a different decoder path inside Tika, and a faxed TIFF is
+typically **multi-page Group 4 bilevel** — the least PDF-like image in ordinary use. Nothing we have
+measured says Tika OCRs one. The PDF result generalises to TIFF **only by assumption**, and if the
+assumption is wrong the consequence is the worst failure available to this project: import 61 GiB,
+search for the will, get nothing back, and conclude it is not there — when it is there, indexed,
+with its text never extracted.
+
+Two further ways the same silence can occur, both untested:
+
+- **Only page 1.** If OCR reads the first page of a multi-page fax and stops, a three-page will is
+  indexed by its cover sheet. Searches for anything on page 2 or 3 return nothing.
+- **Timeouts.** OCR costs a measured **1–3 s per page**. `.env` currently carries
+  `PDF_PARSE_TIMEOUT_MS=20000` — twenty seconds. A 20-page scan needs 20–60 s of OCR alone. If that
+  timeout covers the OCR path, long documents are indexed **with no text and no error**. Long
+  documents are what a will and trust are.
+
+### What now exists
+
+`ci/make-fixtures.sh` generates four more fixtures alongside the original PDF, each carrying its own
+token so a partial failure stays visible as a partial failure:
+
+| Fixture | Token | Catches |
+|---|---|---|
+| `will-scanned.tif` | `OCRTIFFMARKER` | blindness to the `FaxImage.tif` shape |
+| `will-scanned-fax.tif` | `OCRFAXPAGETHREE` | OCR that reads only page 1 of a 3-page Group 4 fax |
+| `will-scanned.gif` | `OCRGIFMARKER` | blindness to the `image001.gif` shape |
+| `will-scanned-long.pdf` | `OCRLASTPAGEMARKER` | a 25-page scan truncated or timed out |
+
+`verify-openarchiver.sh ocr` now attaches every fixture it finds as a **separate message**, asserts
+no token appears in the mailbox as plaintext, and reports **per format**. Formats whose fixture is
+absent are named out loud, so a pass can never be read as covering more than it did. The mailbox
+construction is drilled by `ci/openarchiver-ocr-fixture-guard.sh`.
+
+**This is a blocker for the real import, not a nice-to-have.** Until the TIFF token comes back, the
+hunt's central instrument is unproven against the hunt's central file type.
+
+## 7f. A second hole in the CI enumerator, found the same way
+
+§7d recorded that the lint gates only ever globbed `*.sh ci/*.sh`, and that the fix enumerated from
+`git ls-files`. That fix was itself wrong, and it took shipping to notice.
+
+`git ls-files` lists **tracked** files. A script written but not yet committed is not tracked, so it
+was still invisible to the gates — and a newly written script is the one most likely to be broken.
+The symptom was unmistakable once seen: `openarchiver/backup-env.sh` passed CI cleanly while
+untracked, then failed shellcheck the moment it was committed, having never been checked at all. Six
+findings had been sitting in it the whole time, one of them a genuine runtime fault — a colour
+variable referenced on the failure path but never assigned, which under `set -u` would have aborted
+the script exactly when it was trying to warn that the secrets were not backed up.
+
+The enumerator now uses `git ls-files --cached --others --exclude-standard`. Coverage went 33 → 50 →
+**55 scripts**, and the enumerator is verified by creating an untracked script and asserting it is
+listed.
+
+The pattern is worth naming, because this is its third appearance in this document: **a fix to a
+verification gap is itself a verification, and needs testing in the failing direction just like the
+thing it fixed.** Each time it has been the same shape — the check ran, reported success, and had
+never been presented with the case it existed to catch.
+
+---
+
 ## 8. Sources
 
 - LogicLabs-OU/OpenArchiver `docs/user-guides/searching.md` — from/exclude-sender, to/Cc/Bcc, mailboxes,

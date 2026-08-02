@@ -25,14 +25,20 @@ repo_root() { cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd; }
 # safety-critical code in the repo was the only code CI never parsed or linted. Enumerating from
 # git (with a filesystem fallback for a tarball checkout) means a new subdirectory is covered the
 # day it appears, rather than the day someone remembers to extend a glob.
+#
+# --cached --others is not a detail. Plain `git ls-files` lists only TRACKED files, so a script that
+# has just been written and not yet committed is invisible to the gates — which is precisely the
+# file most likely to contain a fresh mistake. That bug shipped here once: a new script passed CI
+# while it was untracked and failed the moment it was committed, having never been linted at all.
+# --exclude-standard keeps .gitignore honoured so build output is still skipped.
 all_shell_scripts() {
   local root; root="$(repo_root)"
   ( cd "$root" || return 1
     if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-      git ls-files '*.sh'
+      git ls-files --cached --others --exclude-standard '*.sh'
     else
       find . -name '*.sh' -type f -not -path './.git/*' | sed 's|^\./||'
-    fi | sort
+    fi | sort -u
   )
 }
 

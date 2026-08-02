@@ -35,13 +35,52 @@ bash openarchiver/verify-openarchiver.sh source
 | Gate | Proves | Automatic? |
 |---|---|---|
 | `harden` | reads the **running** config: telemetry off, loopback-only, archive not mounted, import read-only, deletion off, no cloud credentials, no upstream default secrets | yes |
-| `ocr` | **the deciding gate** — a token that exists *only inside a scanned image* is findable via attachment-content search | needs one UI import |
+| `ocr` | **the deciding gate** — a token that exists *only inside a scanned image* is findable via attachment-content search, **per format**: image-only PDF, single-page TIFF, a 3-page Group 4 fax TIFF with its token on page 3, GIF, and a 25-page PDF with its token on the last page | needs one UI import |
 | `egress` | the app container itself cannot open an outbound connection, and still serves with the network cut | yes |
 | `source` | sha256 before == after, and the file was not moved or consumed | yes, around the import |
 
 Each gate is tested in **both** directions — a gate that cannot fail is not evidence. If a gate cannot
 demonstrate its property it reports **UNPROVEN and exits non-zero** rather than defaulting to "probably
 fine".
+
+> **The `ocr` gate covers formats, not "OCR".** It once tested an image-only PDF only, and that
+> result was being cited as "OCR works". The estate documents are `FaxImage.tif`, `image001.gif` and
+> `SKM_*.pdf` — and a multi-page Group 4 fax TIFF is the least PDF-like image in ordinary use. Each
+> format now carries its own token and is reported separately, and any format whose fixture is
+> missing is named out loud, so a pass can never be read as covering more than it did.
+> Regenerate the fixtures with `bash ci/make-fixtures.sh` (needs ImageMagick + tesseract).
+
+## `preflight.sh` — one read-only pass over the whole box
+
+Coming back to this after a break, the danger is not disagreement — it is two people confidently
+remembering different boxes. `preflight.sh` measures, in one pass and changing nothing, every
+property the ingestion plan depends on:
+
+| | |
+|---|---|
+| **A repo** | is the checkout the reviewed code, clean, with all six tools present |
+| **B release** | does the RUNNING image match compose, the repo's pin, and the current upstream release |
+| **C stack** | all five containers, and the **backend on :4000** — the failure that once looked like a broken login |
+| **D config** | hardening, plus the settings that decide whether a scan is found: `STORAGE_TYPE`, `ENABLE_DELETION`, `PDF_PARSE_TIMEOUT_MS` |
+| **E secrets** | the `.env` digest, and whether you have asserted a verified off-box copy of **that exact file** |
+| **F ingestion** | exactly which sources and how many messages exist, so "clear the experiments" has a known scope |
+| **G network** | LAN vs link-local, Tailscale, the Caddy route, and whether `ORIGIN` matches how it will be reached |
+| **H box** | disk and RAM against the ~68 GiB / ~4 GiB projections |
+
+Three outcomes, deliberately: **OK**, **BLOCK**, and **UNKNOWN** — and UNKNOWN is *not* a pass. A
+property it could not observe is a property nobody has observed. Exit codes follow: `1` blocking,
+`3` unknowns only, `0` all clear.
+
+It cannot see off-box storage, so it will not claim your `.env` backup exists. Assert it instead —
+and the assertion is re-checked against the live file, so a backup taken **before** a re-key is
+caught as STALE rather than passing:
+
+```bash
+bash openarchiver/preflight.sh --env-backup-verified DIGEST
+```
+
+Drilled by `ci/openarchiver-preflight-guard.sh` against a fully stubbed box — 18 cases, every
+condition planted and required to BLOCK by name.
 
 ## `backup-env.sh` — the lockout gate, made falsifiable
 

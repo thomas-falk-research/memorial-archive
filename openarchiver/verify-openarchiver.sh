@@ -123,22 +123,91 @@ gate_harden(){
 }
 
 # ------------------------------------------------------------------------------------------------
-# Build a synthetic mailbox: one mbox with a plain message and one message carrying the image-only
-# PDF as an attachment. No real data, no real names.
+# The formats the estate documents actually arrive in.
+#
+# The original gate proved ONE thing: attachment-content search sees inside an image-only PDF. That
+# is not the same as proving it sees the documents we are hunting. Those are `FaxImage.tif`,
+# `image001.gif` and `SKM_*.pdf` — and a TIFF is not a PDF. Different container, different decoder
+# path inside Tika, and a fax TIFF is usually MULTI-PAGE Group 4 bilevel, the least PDF-like image
+# in common use. A PDF pass generalises to a TIFF only by assumption, and assumption is what this
+# project does not do.
+#
+# So: one attachment per format, each with its OWN token, reported separately. If TIFF comes back
+# blind while PDF works, that has to be visible as a partial failure rather than averaged away.
+#
+# fixture-file : mime-type : filename-in-mail : token
+OCR_FORMATS="
+will-scanned.pdf:application/pdf:scanned.pdf:OCRWILLMARKER
+will-scanned.tif:image/tiff:FaxImage.tif:OCRTIFFMARKER
+will-scanned-fax.tif:image/tiff:FaxImage-3page.tif:OCRFAXPAGETHREE
+will-scanned.gif:image/gif:image001.gif:OCRGIFMARKER
+will-scanned-long.pdf:application/pdf:SKM_C224e_25page.pdf:OCRLASTPAGEMARKER
+"
+
+fixture_dir(){
+  local here; here="$(cd "$(dirname "$0")" && pwd)"
+  for d in "$here/../ci/fixtures" "$here/fixtures" "$HOME/memorial-archive/ci/fixtures"; do
+    [ -d "$d" ] && { printf '%s' "$d"; return 0; }
+  done
+  return 1
+}
+
+# emit_part <file> <mime> <name> — one base64 MIME attachment part.
+emit_part(){
+  local f="$1" mime="$2" name="$3"
+  printf -- '--SYNTHBOUND\n'
+  printf 'Content-Type: %s; name="%s"\n' "$mime" "$name"
+  printf 'Content-Transfer-Encoding: base64\n'
+  printf 'Content-Disposition: attachment; filename="%s"\n\n' "$name"
+  base64 "$f" | tr -d '\n' | fold -w 76
+  printf '\n'
+}
+
 make_synthetic(){
   mkdir -p "$WORK" || return 1
-  [ -s "$FIXTURE" ] || { bad "no image-only fixture found (looked for ci/fixtures/will-scanned.pdf)"; return 1; }
-  # Confirm the fixture really is image-only, so a pass cannot come from a text layer.
-  if command -v pdftotext >/dev/null 2>&1; then
-    if pdftotext "$FIXTURE" - 2>/dev/null | grep -q "$TOKEN"; then
-      bad "the fixture has a TEXT layer containing $TOKEN — it would not exercise OCR at all"; return 1
+  local fdir; fdir="$(fixture_dir)" || { bad "no ci/fixtures directory found"; return 1; }
+
+  # Which formats do we actually have fixtures for? Missing ones are reported, never silently
+  # dropped — a gate that quietly tests fewer formats than it claims is the failure mode here.
+  local have_any=0 line file mime name tok missing=""
+  ATTACHED=""
+  for line in $OCR_FORMATS; do
+    file="${line%%:*}"; rest="${line#*:}"
+    mime="${rest%%:*}"; rest="${rest#*:}"
+    name="${rest%%:*}"; tok="${rest#*:}"
+    if [ -s "$fdir/$file" ]; then
+      have_any=1
+      ATTACHED="$ATTACHED$file:$mime:$name:$tok "
+    else
+      missing="$missing $file"
     fi
-    ok "fixture confirmed image-only: '$TOKEN' is not extractable without OCR"
-  else
-    warn "pdftotext absent — cannot confirm the fixture is image-only (install poppler-utils)"
+  done
+  if [ "$have_any" -eq 0 ]; then
+    bad "no OCR fixtures found in $fdir — regenerate them with: bash ci/make-fixtures.sh"
+    return 1
   fi
-  local b64 mbox="$WORK/${SYNTH_PREFIX}.mbox"
-  b64="$(base64 "$FIXTURE" | tr -d '\n' | fold -w 76)"
+  if [ -n "$missing" ]; then
+    warn "these format fixtures are absent, so those formats are NOT being tested:$missing"
+    warn "  regenerate them on a box with ImageMagick: bash ci/make-fixtures.sh"
+    warn "  until then, a PASS below says nothing about the missing formats."
+  fi
+
+  # Any fixture with a text layer would pass without OCR ever running. Check the PDFs.
+  if command -v pdftotext >/dev/null 2>&1; then
+    for line in $ATTACHED; do
+      file="${line%%:*}"; tok="${line##*:}"
+      case "$file" in *.pdf)
+        if pdftotext "$fdir/$file" - 2>/dev/null | grep -q "$tok"; then
+          bad "$file has a TEXT layer containing $tok — it would not exercise OCR at all"; return 1
+        fi ;;
+      esac
+    done
+    ok "PDF fixtures confirmed image-only — their tokens are not extractable without OCR"
+  else
+    warn "pdftotext absent — cannot confirm the PDF fixtures are image-only (install poppler-utils)"
+  fi
+
+  local mbox="$WORK/${SYNTH_PREFIX}.mbox" n=0
   {
     printf 'From synthetic@example.invalid Thu Jan  1 00:00:00 2026\n'
     printf 'From: synthetic-sender@example.invalid\n'
@@ -147,51 +216,94 @@ make_synthetic(){
     printf 'Date: Tue, 03 Mar 2009 10:00:00 +0000\n'
     printf 'Message-ID: <%s-1@example.invalid>\n\n' "$SYNTH_PREFIX"
     printf 'This synthetic body mentions nothing interesting.\n\n'
-    printf 'From synthetic@example.invalid Thu Jan  1 00:00:01 2026\n'
-    printf 'From: synthetic-sender@example.invalid\n'
-    printf 'To: synthetic-recipient@example.invalid\n'
-    printf 'Subject: %s scanned attachment\n' "$SYNTH_PREFIX"
-    printf 'Date: Tue, 03 Mar 2009 11:00:00 +0000\n'
-    printf 'Message-ID: <%s-2@example.invalid>\n' "$SYNTH_PREFIX"
-    printf 'MIME-Version: 1.0\n'
-    printf 'Content-Type: multipart/mixed; boundary="SYNTHBOUND"\n\n'
-    printf -- '--SYNTHBOUND\nContent-Type: text/plain\n\n'
-    printf 'The body deliberately does NOT contain the token.\n\n'
-    printf -- '--SYNTHBOUND\n'
-    printf 'Content-Type: application/pdf; name="scanned.pdf"\n'
-    printf 'Content-Transfer-Encoding: base64\n'
-    printf 'Content-Disposition: attachment; filename="scanned.pdf"\n\n'
-    printf '%s\n' "$b64"
-    printf -- '--SYNTHBOUND--\n'
+    # One message PER FORMAT. Separate messages, not one message with five attachments: a single
+    # message would let one failed extraction take the others down with it, and the result view
+    # would not say which attachment the hit came from.
+    for line in $ATTACHED; do
+      file="${line%%:*}"; rest="${line#*:}"
+      mime="${rest%%:*}"; rest="${rest#*:}"
+      name="${rest%%:*}"; tok="${rest#*:}"
+      n=$((n+1))
+      printf 'From synthetic@example.invalid Thu Jan  1 00:00:0%d 2026\n' "$n"
+      printf 'From: synthetic-sender@example.invalid\n'
+      printf 'To: synthetic-recipient@example.invalid\n'
+      printf 'Subject: %s scanned attachment %s\n' "$SYNTH_PREFIX" "$name"
+      printf 'Date: Tue, 03 Mar 2009 1%d:00:00 +0000\n' "$n"
+      printf 'Message-ID: <%s-att%d@example.invalid>\n' "$SYNTH_PREFIX" "$n"
+      printf 'MIME-Version: 1.0\n'
+      printf 'Content-Type: multipart/mixed; boundary="SYNTHBOUND"\n\n'
+      printf -- '--SYNTHBOUND\nContent-Type: text/plain\n\n'
+      printf 'The body deliberately does NOT contain the token.\n\n'
+      emit_part "$fdir/$file" "$mime" "$name"
+      printf -- '--SYNTHBOUND--\n\n'
+    done
   } >"$mbox"
   [ -s "$mbox" ] || { bad "failed to build the synthetic mailbox"; return 1; }
+
+  # Prove the tokens are not in the mbox as plaintext. Base64 hides them, but this is the assertion
+  # that makes a later hit attributable to OCR and nothing else — so it is checked, not assumed.
+  for line in $ATTACHED; do
+    tok="${line##*:}"
+    if grep -qF "$tok" "$mbox"; then
+      bad "token $tok appears as PLAINTEXT in the synthetic mailbox — a hit would prove nothing"
+      return 1
+    fi
+  done
+  ok "no token appears in the mailbox as plaintext — only OCR can surface them"
+
   mkdir -p "$IMPORT_DIR" 2>/dev/null || sudo mkdir -p "$IMPORT_DIR"
   cp "$mbox" "$IMPORT_DIR/" 2>/dev/null || sudo cp "$mbox" "$IMPORT_DIR/"
-  ok "synthetic mailbox placed at $IMPORT_DIR/${SYNTH_PREFIX}.mbox (2 messages, 1 image-only attachment)"
-  say  "      the token '$TOKEN' exists ONLY inside the attached image — nowhere in any header or body"
+  ok "synthetic mailbox placed at $IMPORT_DIR/${SYNTH_PREFIX}.mbox"
   return 0
 }
 
 gate_ocr(){
-  hdr "GATE 2/4 — does attachment-content search actually see inside a scan?"
+  hdr "GATE 2/4 — does attachment-content search see inside EVERY format we are hunting?"
   make_synthetic || { fails=$((fails+1)); return 1; }
   say ""
-  say "  This gate needs the import performed once through the UI (there is no documented CLI import):"
+  say "  Import it once through the UI (there is no documented CLI import):"
   say "    1. open $BASE_URL  ->  Ingestion sources  ->  add a source"
   say "    2. type: Mbox      path: /import/${SYNTH_PREFIX}.mbox"
-  say "    3. run it, wait for the job to finish, then search for:   $TOKEN"
-  say "       with 'Search in' set to include ATTACHMENT CONTENT"
+  say "       Preserve Original File = CHECKED"
+  say "    3. wait for the job to FINISH, then search each token below with 'Search in' set to"
+  say "       include ATTACHMENT CONTENT"
   say ""
-  say "  ${c_b}How to read the result${c_0}"
-  say "    token FOUND    -> Tika is OCR'ing attachments. The value case holds: every faxed scan in"
-  say "                      MKH's mailbox becomes searchable by its CONTENT. Proceed to gate 3."
-  say "    token MISSING  -> attachment-content search is blind to scans. Open Archiver is then only"
-  say "                      a metadata filter (from/to/date/has-attachment) — still useful, but the"
-  say "                      headline reason for deploying it is gone. STOP and re-plan before"
-  say "                      importing the real 1.67 GB mailbox."
+  say "  ${c_b}Search each of these and record FOUND or MISSING for every line${c_0}"
   say ""
-  say "  Paste the outcome back. If the API is reachable without a login you can also try:"
-  say "    curl -s '$BASE_URL/v1/search?keywords=$TOKEN&searchIn=attachment_content' | head -c 400"
+  # Only explain the formats actually attached. Printing guidance for a token that is not in the
+  # mailbox would invite someone to search for it, not find it, and read that as a blocker.
+  local line file rest mime name tok
+  for line in $ATTACHED; do
+    file="${line%%:*}"; rest="${line#*:}"
+    mime="${rest%%:*}"; rest="${rest#*:}"
+    name="${rest%%:*}"; tok="${rest#*:}"
+    printf '    %-18s in %-24s (%s)\n' "$tok" "$name" "$file"
+    case "$tok" in
+      OCRWILLMARKER)
+        say "        image-only PDF. Proven once already; a miss here is a REGRESSION — something"
+        say "        changed in Tika or in the configuration." ;;
+      OCRTIFFMARKER)
+        say "        single-page TIFF, the FaxImage.tif shape. If this is missing, the faxed estate"
+        say "        documents are invisible to content search however well the PDF path works."
+        say "        This is the format the hunt actually depends on." ;;
+      OCRFAXPAGETHREE)
+        say "        page 3 of a 3-page Group 4 fax TIFF. Missing while OCRTIFFMARKER is found means"
+        say "        only the FIRST page of each multi-page fax is indexed — and a will is not one page." ;;
+      OCRGIFMARKER)
+        say "        the image001.gif shape." ;;
+      OCRLASTPAGEMARKER)
+        say "        the last page of a 25-page image-only PDF. Missing while OCRWILLMARKER is found"
+        say "        means long scans are truncated or timing out, and the document is indexed with no"
+        say "        text and NO ERROR. Raise PDF_PARSE_TIMEOUT_MS and Tika's OCR timeout, then re-run." ;;
+    esac
+    say ""
+  done
+  say "    ${c_r}Any MISSING line is a blocker for the real import${c_0} — importing 61 GiB against a"
+  say "    format the index cannot read produces confident, empty searches over documents that"
+  say "    are actually there. That is worse than knowing it does not work."
+  say ""
+  say "  If the API is reachable without a login, each token can be checked directly:"
+  say "    curl -s '$BASE_URL/v1/search?keywords=OCRTIFFMARKER&searchIn=attachment_content' | head -c 400"
 }
 
 # ------------------------------------------------------------------------------------------------
