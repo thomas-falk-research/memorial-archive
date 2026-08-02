@@ -98,6 +98,16 @@ cat >"$STUBS/findmnt" <<'S'
 #!/usr/bin/env bash
 echo "ro,relatime"
 S
+# Caddy on the real box is a systemd service, not a container — the stub has to model that, or the
+# drill would keep certifying a detection path the box never takes.
+cat >"$STUBS/systemctl" <<'S'
+#!/usr/bin/env bash
+case "$1" in
+  is-active)       [ "$(cat "$STUB_STATE/caddy")" = "active" ] && exit 0 || exit 3 ;;
+  list-unit-files) [ "$(cat "$STUB_STATE/caddy")" = "absent" ] || echo "caddy.service enabled" ;;
+esac
+exit 0
+S
 cat >"$STATE/sqlstub" <<'S'
 #!/usr/bin/env bash
 q="$1"
@@ -120,7 +130,7 @@ chmod +x "$STUBS"/* "$STATE/sqlstub"
 # ------------------------------------------------------------------------------------------------
 # A healthy box, as the baseline every case mutates.
 reset_healthy(){
-  printf 'openarchiver-app\tUp 2 days\nopenarchiver-postgres\tUp 2 days\nopenarchiver-valkey\tUp 2 days\nopenarchiver-meilisearch\tUp 2 days\nopenarchiver-tika\tUp 2 days\ncaddy\tUp 5 days\n' >"$STATE/containers"
+  printf 'openarchiver-app\tUp 2 days\nopenarchiver-postgres\tUp 2 days\nopenarchiver-valkey\tUp 2 days\nopenarchiver-meilisearch\tUp 2 days\nopenarchiver-tika\tUp 2 days\n' >"$STATE/containers"
   echo "v0.5.2"  >"$STATE/image"
   echo "UP"      >"$STATE/backend"
   echo "200"     >"$STATE/http"
@@ -128,7 +138,8 @@ reset_healthy(){
   echo "100.64.0.1" >"$STATE/tsip"
   echo "500"     >"$STATE/disk_g"
   echo "10600"   >"$STATE/mem_mb"
-  printf 'mail.home {\n  reverse_proxy 127.0.0.1:3010\n}\n' >"$STATE/caddyfile"
+  echo "active" >"$STATE/caddy"
+  printf 'http://mail.home {\n\treverse_proxy 127.0.0.1:3010\n}\n' >"$STATE/caddyfile"
   cat >"$STATE/compose" <<'C'
 services:
   open-archiver:
@@ -171,6 +182,7 @@ E
 run_preflight(){
   PATH="$STUBS:$PATH" STUB_STATE="$STATE" \
   OPENARCHIVER_DIR="$APP" REPO_DIR="$FAKEREPO" ARCHIVE_ROOT="$WORK/archive" \
+  CADDYFILE="$STATE/caddyfile" \
     bash "$TOOL" --no-network "$@" 2>&1
 }
 
@@ -279,6 +291,37 @@ expect_block "too little disk for the projected corpus" "below what the full cor
 
 echo "2048" >"$STATE/mem_mb"
 expect_block "too little RAM for the stack" "below the stack's ~4 GiB floor"
+
+echo "inactive" >"$STATE/caddy"
+expect_block "Caddy installed but stopped" "Caddy is installed but NOT running"
+
+# ...and the healthy path must recognise the systemd service, or the block above proves nothing
+# about the detection actually used on the box.
+cases=$((cases+1))
+out="$(run_preflight)"
+if printf '%s' "$out" | grep -qF "Caddy is running (systemd service)"; then
+  ok "a running Caddy systemd service is detected (not just a container)"
+else
+  bad "the systemd Caddy service was not detected — this is how it runs on the box"
+  printf '%s\n' "$out" | grep -iE 'caddy' | sed 's/^/      /'; rc=1
+fi
+
+cases=$((cases+1))
+if printf '%s' "$out" | grep -qF "mail.<domain> route is present"; then
+  ok "the mail.<domain> route is read from the Caddyfile on disk"
+else
+  bad "the mail route was not found in the Caddyfile"; rc=1
+fi
+
+printf 'http://photos.home {\n\treverse_proxy 127.0.0.1:2283\n}\n' >"$STATE/caddyfile"
+cases=$((cases+1))
+noroute_out="$(run_preflight)"
+if printf '%s' "$noroute_out" | grep -qF "not stood up yet"; then
+  ok "a Caddyfile without the mail route is reported as not stood up"
+else
+  bad "a missing mail route was not reported"; rc=1
+fi
+reset_healthy
 
 # ------------------------------------------------------------------------------------------------
 hdr "Summary"

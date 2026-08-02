@@ -411,13 +411,33 @@ else
   unk "tailscale is not installed on this box"
 fi
 
-if dk ps --format '{{.Names}}' | grep -q '^caddy'; then
-  ok "Caddy is running"
-  cf="$(dk exec caddy sh -c 'cat /etc/caddy/Caddyfile 2>/dev/null' | grep -c 'mail\.')"
-  if [ "${cf:-0}" -gt 0 ]; then ok "a mail.<domain> route is present in the running Caddyfile"
-  else unk "no mail.<domain> route in the running Caddyfile — it is wired in archive-proxy-setup.sh but not stood up"; fi
+# Caddy on this box is a SYSTEMD service reading /etc/caddy/Caddyfile — not a container. Looking
+# only for a container reported "no Caddy found" on a box where Caddy was running fine, which is a
+# false unknown: it makes a healthy component look like a gap and buries the real ones.
+CADDYFILE="${CADDYFILE:-/etc/caddy/Caddyfile}"
+caddy_up=""
+if have systemctl && systemctl is-active --quiet caddy 2>/dev/null; then
+  caddy_up="systemd service"
+elif dk ps --format '{{.Names}}' | grep -q '^caddy'; then
+  caddy_up="container"
+fi
+if [ -n "$caddy_up" ]; then
+  ok "Caddy is running ($caddy_up)"
+elif have systemctl && systemctl list-unit-files 2>/dev/null | grep -q '^caddy\.service'; then
+  bad "Caddy is installed but NOT running — nothing is fronting the apps"
+  note "  sudo systemctl status caddy"
 else
-  unk "no running Caddy container found"
+  unk "no Caddy found as a systemd service or a container"
+fi
+
+if sudo test -f "$CADDYFILE" 2>/dev/null || [ -f "$CADDYFILE" ]; then
+  if sudo grep -qE '^\s*https?://mail\.' "$CADDYFILE" 2>/dev/null; then
+    ok "a mail.<domain> route is present in $CADDYFILE"
+  else
+    unk "no mail.<domain> route in $CADDYFILE — wired in archive-proxy-setup.sh but not stood up yet"
+  fi
+else
+  unk "no $CADDYFILE to read — cannot tell whether the mail route exists"
 fi
 
 origin="$(envget ORIGIN 2>/dev/null)"

@@ -595,6 +595,60 @@ never been presented with the case it existed to catch.
 
 ---
 
+## 7g. First preflight on the real box — 2026-08-02
+
+`openarchiver/preflight.sh` run on archive-pc: **28 OK · 2 UNKNOWN · 1 BLOCKING.**
+
+Most of what this document treats as open is, on the actual box, already settled: the running image
+matches compose, the repo's pin and the current upstream release (v0.5.2); five containers up with
+the backend listening on :4000; hardening intact; a real routable LAN address **and** Tailscale up —
+which retires the `169.254.x` APIPA worry that has been carried as an open question since the last
+session.
+
+### The blocker
+
+`PDF_PARSE_TIMEOUT_MS=20000`, as predicted in §7e. Raised to **300000** (5 minutes) in
+`archive-openarchiver-setup.sh`, overridable with `OA_PDF_TIMEOUT_MS`. The asymmetry decides the
+value: a timeout that is too long costs one stalled worker; a timeout that is too short costs the
+document, silently, with no error and an empty search result.
+
+Whether that setting even governs the OCR path in v0.5.2 is still unverified — which is exactly what
+the 25-page `will-scanned-long.pdf` fixture is for. Tika carries its own OCR timeout as well, so the
+empirical answer (does `OCRLASTPAGEMARKER` come back?) is worth more than reading either default.
+
+### Two defects the run exposed
+
+**1. A false UNKNOWN — "no running Caddy container found".** Caddy on this box is a **systemd
+service** reading `/etc/caddy/Caddyfile`, not a container. The check only looked for a container, so
+it reported a gap where a healthy component was running. A false unknown is not harmless: it spends
+the operator's attention and makes the real unknowns harder to see. Now checks systemd first, then a
+container, reads the Caddyfile from disk, and **blocks** if the unit exists but is not active.
+
+**2. A lockout footgun in our own installer.** `archive-openarchiver-setup.sh` defaulted
+`OPENARCHIVER_URL` to `http://mail.${BASE_DOMAIN}` on *every* run. So re-running it to change
+something unrelated — this very timeout — would have silently repointed `ORIGIN`/`APP_URL` from the
+SSH tunnel (`127.0.0.1:8931`) to `mail.home`, and the next login through the tunnel would fail: the
+page loads, the form post is rejected on origin, and nothing says why.
+
+The script already reuses its secrets on re-run for precisely this reason. The access URL now
+follows the same rule — **explicit request, else what is already deployed, else the default** — and
+the pre-confirmation banner prints the resolved URL plus a warning when it differs from the
+installed one, so a deliberate cutover still works and an accidental one is visible before you say
+yes. It is worth naming the general shape: *a script that preserves the dangerous state carefully
+and rewrites the adjacent state casually is still a lockout risk.*
+
+### And the instructions were wrong
+
+The first thing attempted from the fingerprint output was
+`ssh HOST 'sudo cat .../.env' > backup.txt`, which returned **"sudo: A terminal is required to
+authenticate."** `backup-env.sh` was *designed* around the zero-byte file that failure leaves behind
+— and then printed the very command that causes it. The guidance now stages an owned copy on the box
+with `sudo install -m 600 -o USER`, pulls it with plain `scp`, and explicitly warns against `ssh -t`,
+which would appear to fix it while a tty rewrote every LF to CRLF (caught by the digest, but a wasted
+round trip). A tool that anticipates a failure mode should not hand you the command that triggers it.
+
+---
+
 ## 8. Sources
 
 - LogicLabs-OU/OpenArchiver `docs/user-guides/searching.md` — from/exclude-sender, to/Cc/Bcc, mailboxes,

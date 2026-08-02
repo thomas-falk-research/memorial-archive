@@ -37,6 +37,9 @@ OA_PG_IMAGE="${OA_PG_IMAGE:-postgres:17-alpine}"   # pinned MAJOR — never chan
 OA_VALKEY_IMAGE="${OA_VALKEY_IMAGE:-valkey/valkey:8-alpine}"
 OA_MEILI_IMAGE="${OA_MEILI_IMAGE:-getmeili/meilisearch:v1.38}"
 OA_TIKA_IMAGE="${OA_TIKA_IMAGE:-apache/tika:3.2.2.0-full}"   # -full bundles OCR; the minimal image cannot read scans
+# 5 minutes. Deliberately generous: a timeout that is too long costs one stalled worker, a timeout
+# that is too short costs the document. See the note beside PDF_PARSE_TIMEOUT_MS in the .env below.
+OA_PDF_TIMEOUT_MS="${OA_PDF_TIMEOUT_MS:-300000}"
 FALLBACK_VERSION="v0.5.2"                          # recorded pin; audited by ci/version-audit.sh
 DOCKER_NET="${ARCHIVE_DOCKER_NET:-memorial}"
 BASE_DOMAIN="${BASE_DOMAIN:-home}"
@@ -75,7 +78,15 @@ if [[ -r /etc/archive-ingest.conf ]]; then
   # shellcheck source=/dev/null
   . /etc/archive-ingest.conf || true
 fi
-OPENARCHIVER_URL="${OPENARCHIVER_URL:-http://mail.${BASE_DOMAIN}}"
+# The access URL is REUSED on a re-run, exactly like the secrets below it, and for the same reason.
+#
+# ORIGIN/APP_URL decide which origin SvelteKit will accept form posts from. Defaulting them to
+# mail.<domain> on every run meant that re-running this script to change something unrelated — a
+# timeout, an image tag — would silently repoint ORIGIN and lock the operator out of the URL they
+# were actually using (e.g. an SSH tunnel on 127.0.0.1:8931). The login page would load and the
+# login would simply fail. Changing how the app is reached must be a DELIBERATE act, so it now takes
+# an explicit OPENARCHIVER_URL; otherwise whatever the install already answers on is preserved.
+OPENARCHIVER_URL_REQUESTED="${OPENARCHIVER_URL:-}"
 
 sudo -v
 sudo docker info >/dev/null 2>&1 || die "Docker isn't available/running. Run provision.sh (and start Docker) first."
@@ -103,11 +114,29 @@ fi
 OPENARCHIVER_VERSION="v${OPENARCHIVER_VERSION#v}"
 IMAGE_TAG="$OPENARCHIVER_VERSION"
 
+# ---- Access URL resolution (explicit request, else what is already deployed, else default) ------
+installed_url=""
+if sudo test -f "$APP_DIR/.env"; then
+  installed_url="$(sudo sed -n 's/^APP_URL=//p' "$APP_DIR/.env" 2>/dev/null | head -1)"
+fi
+if [[ -n "$OPENARCHIVER_URL_REQUESTED" ]]; then
+  OPENARCHIVER_URL="$OPENARCHIVER_URL_REQUESTED"; url_source="requested explicitly"
+elif [[ -n "$installed_url" ]]; then
+  OPENARCHIVER_URL="$installed_url";             url_source="reused from the existing install"
+else
+  OPENARCHIVER_URL="http://mail.${BASE_DOMAIN}"; url_source="default for a fresh install"
+fi
+
 host_short="$(hostname -s 2>/dev/null || hostname)"
 lan_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
 
 log "This will deploy Open Archiver ${OPENARCHIVER_VERSION} with Docker, using sudo:"
 printf '    - version: %s  (%s)\n' "$OPENARCHIVER_VERSION" "$version_source"
+printf '    - ORIGIN/APP_URL: %s  (%s)\n' "$OPENARCHIVER_URL" "$url_source"
+if [[ -n "$installed_url" && "$OPENARCHIVER_URL" != "$installed_url" ]]; then
+  warn "This CHANGES how the app is reached: ${installed_url} -> ${OPENARCHIVER_URL}"
+  warn "  Logins at the old URL will stop working the moment this finishes."
+fi
 printf '    - 5 services: app + PostgreSQL + Valkey + Meilisearch + Tika (a JVM) — budget ~4 GB RAM\n'
 printf '    - app data in Docker volumes on the OS disk (off the archive budget); the archive is NEVER mounted\n'
 printf '    - import mail by copying files into: %s/import   (mounted READ-ONLY into the app)\n' "$APP_DIR"
@@ -180,7 +209,12 @@ STORAGE_LOCAL_ROOT_PATH=/var/lib/open-archiver
 BODY_SIZE_LIMIT=100M
 
 TIKA_URL=http://openarchiver-tika:9998
-PDF_PARSE_TIMEOUT_MS=20000
+# OCR is the expensive operation: 1-3 SECONDS PER PAGE, measured on this box. Upstream's 20 s
+# default is fine for born-digital PDFs and far too short for what we are actually indexing — a
+# 25-page faxed will needs 25-75 s of OCR alone. When this expires the document is still imported,
+# just indexed WITHOUT its text and without an error, so the search comes back empty for a document
+# that is sitting right there. That is the one failure mode this archive cannot tolerate.
+PDF_PARSE_TIMEOUT_MS=${OA_PDF_TIMEOUT_MS}
 
 JWT_EXPIRES_IN=7d
 RATE_LIMIT_WINDOW_MS=60000

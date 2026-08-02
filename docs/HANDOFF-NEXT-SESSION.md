@@ -99,9 +99,14 @@ git fetch origin && git checkout main && git pull --ff-only origin main
 bash openarchiver/preflight.sh
 
 # 3. CLOSE THE LOCKOUT GATE — hard blocker; ENCRYPTION_KEY / STORAGE_ENCRYPTION_KEY cannot be
-#    regenerated, and every message imported before they are safe is lost if this box dies
-bash openarchiver/backup-env.sh                      # digest + the exact fetch command
+#    regenerated, and every message imported before they are safe is lost if this box dies.
+#    NOTE: `ssh HOST 'sudo cat .../.env'` fails with "a terminal is required to authenticate",
+#    and `ssh -t` silently rewrites LF to CRLF. Stage an owned copy on the box instead:
+bash openarchiver/backup-env.sh                      # digest + the exact commands
+#    on the box:   sudo install -m 600 -o "$USER" /srv/apps/openarchiver/.env ~/openarchiver-env-backup.txt
+#    from the Mac: scp archive-pc:~/openarchiver-env-backup.txt ~/openarchiver-env-backup.txt
 bash openarchiver/backup-env.sh verify ~/openarchiver-env-backup.txt --expect DIGEST
+#    then remove the staging copy from the box:  rm ~/openarchiver-env-backup.txt
 bash openarchiver/preflight.sh --env-backup-verified DIGEST     # re-checks against the LIVE file
 
 # 4. FINISH THE EXPERIMENTS — must happen BEFORE the wipe; it needs the test data
