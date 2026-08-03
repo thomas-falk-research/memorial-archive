@@ -189,14 +189,26 @@ Document reference: $token" \
 # format. Everything is normalised to PNG first: whether tesseract's local build can open a GIF is
 # not the question this check is asking, and conflating the two would let a fixture problem hide
 # behind a decoder problem (or the reverse).
+# readback_ok <image> <frame> <token> — returns non-zero instead of dying, so a caller can fall
+# back to a different encoding. When tesseract is absent nothing is provable either way: that is
+# reported and treated as "not disproven", never as a pass.
+readback_ok(){
+  local img="$1" frame="$2" token="$3" png="$work/rb.png"
+  command -v tesseract >/dev/null 2>&1 || { note "  (tesseract absent — cannot prove $(basename "$img") is OCR-clean)"; return 0; }
+  rm -f "$png"
+  "${IM[@]}" "${img}[${frame}]" "$png" 2>/dev/null || { note "  (could not rasterise $(basename "$img") frame $frame)"; return 1; }
+  tesseract "$png" stdout 2>/dev/null | grep -qF "$token"
+}
+
+# ocr_readback <image> <token> [frame] — the same check, fatal on failure.
 ocr_readback(){
-  local img="$1" token="$2" png="$work/rb.png"
-  command -v tesseract >/dev/null 2>&1 || { note "  (tesseract absent — skipping read-back for $(basename "$img"))"; return 0; }
-  "${IM[@]}" "${img}[0]" "$png" 2>/dev/null || { note "  (could not rasterise $(basename "$img") — skipping read-back)"; return 0; }
-  if tesseract "$png" stdout 2>/dev/null | grep -qF "$token"; then
-    ok "OCR read-back OK: $(basename "$img") -> $token"
+  local img="$1" token="$2" frame="${3:-0}"
+  if readback_ok "$img" "$frame" "$token"; then
+    ok "OCR read-back OK: $(basename "$img")[$frame] -> $token"
   else
-    die "tesseract could NOT read $token back from $(basename "$img") — the fixture is not OCR-clean."
+    die "tesseract could NOT read $token off $(basename "$img") frame $frame — the fixture is not OCR-clean.
+    Fix this before trusting any gate that uses it: downstream, a MISSING result would be
+    indistinguishable from the index genuinely being blind to this format."
   fi
 }
 
@@ -212,15 +224,30 @@ render_page "PAGE TWO OF THREE"  "LAST WILL AND TESTAMENT" "$work/fax2.png"
 render_page "$TOKEN_FAX"         "SCHEDULE OF ASSETS"      "$work/fax3.png"
 # A real fax is bilevel Group 4. Fall back to LZW rather than skipping: a multi-page TIFF that is
 # not Group 4 still tests the multi-page path, which is the property that matters most here.
+fax_out="$here/fixtures/will-scanned-fax.tif"
+fax_kind="Group 4"
 if ! "${IM[@]}" "$work/fax1.png" "$work/fax2.png" "$work/fax3.png" \
-       -monochrome -compress Group4 "$here/fixtures/will-scanned-fax.tif" 2>/dev/null; then
+       -monochrome -compress Group4 "$fax_out" 2>/dev/null; then
   note "  (Group 4 unavailable — falling back to LZW; still multi-page)"
+  fax_kind="LZW"
   "${IM[@]}" "$work/fax1.png" "$work/fax2.png" "$work/fax3.png" \
-    -compress lzw "$here/fixtures/will-scanned-fax.tif" || die "could not write the multi-page TIFF."
+    -compress lzw "$fax_out" || die "could not write the multi-page TIFF."
 fi
-pages="$("${IMID[@]}" "$here/fixtures/will-scanned-fax.tif" 2>/dev/null | wc -l)"
+# Group 4 is bilevel, so -monochrome thresholds an antialiased render. That can thin the glyphs
+# enough that tesseract loses them — and an illegible page 3 would surface downstream as "only the
+# FIRST page of each fax is indexed", which is a completely different diagnosis with a completely
+# different fix. Prove page 3 reads back; if the bilevel encoding costs legibility, keep the
+# multi-page property (the one that matters) and drop to LZW.
+if ! readback_ok "$fax_out" 2 "$TOKEN_FAX"; then
+  note "  (page 3 illegible after $fax_kind encoding — rebuilding as LZW to preserve legibility)"
+  fax_kind="LZW"
+  "${IM[@]}" "$work/fax1.png" "$work/fax2.png" "$work/fax3.png" \
+    -compress lzw "$fax_out" || die "could not write the multi-page TIFF."
+fi
+pages="$("${IMID[@]}" "$fax_out" 2>/dev/null | wc -l)"
 [ "${pages:-0}" -eq 3 ] || die "the fax TIFF has ${pages:-0} pages, expected 3."
-ok "multi-page fax TIFF written (3 pages, token on the last)"
+ocr_readback "$fax_out" "$TOKEN_FAX" 2
+ok "multi-page fax TIFF written (3 pages, $fax_kind, token on the last)"
 
 note "Rendering the GIF fixture (the image001.gif shape)..."
 render_page "$TOKEN_GIF" "LAST WILL AND TESTAMENT" "$work/gif.png"
@@ -289,6 +316,27 @@ if command -v pdftotext >/dev/null 2>&1; then
   [ -z "$(pdftotext "$here/fixtures/will-scanned-long.pdf" - 2>/dev/null | tr -d '[:space:]')" ] \
     || die "the long PDF has a text layer — it would not exercise OCR."
   ok "long PDF has no text layer"
+fi
+# This fixture exists for its LAST page. Prove that page is legible HERE, so a downstream miss can
+# only mean the extractor stopped short — never that page 25 was unreadable all along.
+if command -v pdftoppm >/dev/null 2>&1 && command -v tesseract >/dev/null 2>&1; then
+  rm -f "$work"/lp-*.png
+  pdftoppm -r 200 -png -f "$LONG_PAGES" -l "$LONG_PAGES" \
+    "$here/fixtures/will-scanned-long.pdf" "$work/lp" >/dev/null 2>&1 \
+    || die "poppler could not rasterise page ${LONG_PAGES} of the long PDF."
+  lp="$(find "$work" -maxdepth 1 -name 'lp-*.png' | head -1)"
+  [ -n "$lp" ] || die "no rasterised page produced for page ${LONG_PAGES}."
+  tesseract "$lp" stdout 2>/dev/null | grep -qF "$TOKEN_LONG" \
+    || die "tesseract could NOT read $TOKEN_LONG off page ${LONG_PAGES} — the fixture is not OCR-clean."
+  ok "OCR read-back OK: will-scanned-long.pdf page ${LONG_PAGES} -> $TOKEN_LONG"
+else
+  note "  (poppler/tesseract absent — cannot prove page ${LONG_PAGES} is OCR-clean)"
+fi
+# "Token on the last page" is only meaningful if the page count is what we claim.
+if command -v pdfinfo >/dev/null 2>&1; then
+  npg="$(pdfinfo "$here/fixtures/will-scanned-long.pdf" 2>/dev/null | awk '/^Pages:/{print $2}')"
+  [ "${npg:-0}" -eq "$LONG_PAGES" ] || die "the long PDF reports ${npg:-unknown} pages, expected $LONG_PAGES."
+  ok "long PDF really has $npg pages"
 fi
 ok "wrote will-scanned-long.pdf (${LONG_PAGES} pages, token only on the last)"
 
