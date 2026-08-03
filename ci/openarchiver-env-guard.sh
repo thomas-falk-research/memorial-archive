@@ -166,6 +166,39 @@ hdr "Every way the backup goes wrong is caught, and named"
 
 run_case "the copy was never made" fail "does not exist" -- verify "$WORK/not-there.env" --expect "$GOOD_SHA"
 
+# An absent file is not a wrong file. Reporting it as a MISMATCH implies contents that differ, and
+# invites chasing a corrupted backup that does not exist — which is exactly what it did the first
+# time someone verified a copy, deleted the staging file, and re-ran the command out of habit.
+cases=$((cases+1))
+gone_out="$(OPENARCHIVER_ENV="$LIVE" bash "$TOOL" verify "$WORK/not-there.env" --expect "$GOOD_SHA" 2>&1)"
+if printf '%s' "$gone_out" | grep -qF "MISMATCH"; then
+  bad "a missing file was reported as a MISMATCH — that implies a file whose contents differ"
+  printf '%s\n' "$gone_out" | sed 's/^/      /'
+  rc=1
+elif ! printf '%s' "$gone_out" | grep -qF "NO COPY TO CHECK"; then
+  bad "a missing file did not produce the distinct 'nothing to compare' outcome"
+  rc=1
+elif printf '%s' "$gone_out" | grep -qF "which keys differ"; then
+  bad "it offered to localise a difference in a file that does not exist"
+  rc=1
+else
+  ok "a missing file reads as 'nothing to compare', not as a mismatch"
+fi
+
+# ...and that must not have been achieved by softening the real mismatch path. A file that IS there
+# and IS different still has to say MISMATCH, or the fix above traded one wrong answer for another.
+cases=$((cases+1))
+make_env "$WORK/present-but-different.env" "$K_ENC" \
+  "8888888888888888888888888888888888888888888888888888888888888888"
+diff_out="$(OPENARCHIVER_ENV="$LIVE" bash "$TOOL" verify "$WORK/present-but-different.env" --expect "$GOOD_SHA" 2>&1)"
+if printf '%s' "$diff_out" | grep -qF "MISMATCH"; then
+  ok "a present-but-different file still reports MISMATCH"
+else
+  bad "MISMATCH no longer fires for a genuinely different file"
+  printf '%s\n' "$diff_out" | sed 's/^/      /'
+  rc=1
+fi
+
 # The one that matters most: `ssh HOST 'sudo cat ...' > file` with sudo unable to prompt.
 : >"$WORK/empty.env"
 run_case "the copy is zero bytes (sudo could not prompt)" fail "EMPTY (0 bytes)" \

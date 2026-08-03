@@ -405,6 +405,21 @@ mode_verify(){
     [ "${#INS_KEYNAMES[@]}" -gt 0 ] && render_keytable
   fi
 
+  # Absent, unreadable or empty: there is no digest, so there is nothing to compare. Carrying on to
+  # the reference comparison would print "MISMATCH" against an empty digest — technically true and
+  # actively misleading, because it implies a file exists whose CONTENTS differ, and then offers to
+  # say which keys differ in a file that is not there. Distinguish "no copy" from "wrong copy".
+  if [ -z "$INS_SHA" ]; then
+    fails=$((fails+1))
+    REPORT+=$'\n'"  ${c_r}NO COPY TO CHECK${c_0} — nothing readable at that path, so nothing was compared."$'\n'
+    REPORT+="  This is not a mismatch. No claim is being made about your backup either way."$'\n'
+    REPORT+=$'\n'"  If you already verified the copy and removed the staging file, that is the expected"$'\n'
+    REPORT+="  end state — point this at the copy you KEPT, not the one you deleted. A digest match"$'\n'
+    REPORT+="  you have already seen is complete evidence; it does not need repeating."$'\n'
+    guarded_print "$REPORT"
+    return 0
+  fi
+
   # Establish a reference. Structure alone can never be enough: a perfectly-formed .env from some
   # OTHER install would sail through every check above and decrypt nothing.
   local ref_sha="" ref_source="" ref_path=""
