@@ -21,7 +21,7 @@
 #   3. A tiny pure-stdlib Python step wraps the JPEG in a one-page PDF via the /DCTDecode filter.
 # The result is a standards-compliant, image-only PDF that poppler rasterizes and tesseract OCRs.
 #
-# Run it from anywhere as a regular user (no sudo). Needs: ImageMagick (convert/identify), python3,
+# Run it from anywhere as a regular user (no sudo). Needs: ImageMagick (magick OR convert), python3,
 # and — to self-verify the result — poppler-utils (pdftotext/pdftoppm) and tesseract.
 #
 #   ci/make-fixtures.sh
@@ -42,9 +42,21 @@ ok()  { printf '%s✓%s %s\n' "$c_grn" "$c_rst" "$*"; }
 note(){ printf '%s%s%s\n' "$c_cyn" "$*" "$c_rst"; }
 die() { printf '%s✗ %s%s\n' "$c_red" "$*" "$c_rst" >&2; exit 1; }
 
-for t in convert identify python3; do
-  command -v "$t" >/dev/null 2>&1 || die "Required tool not found: $t (install ImageMagick / python3)."
-done
+command -v python3 >/dev/null 2>&1 || die "Required tool not found: python3."
+
+# ImageMagick 7 renamed the entry point: `magick` replaces `convert`, and `identify` becomes
+# `magick identify`. Ubuntu's `imagemagick` package still ships IM6 with `convert`, so both are in
+# the field. Detect rather than assume — a hard-coded `convert` fails on IM7 with "command not
+# found", which reads like ImageMagick is absent when it is installed and working.
+if command -v magick >/dev/null 2>&1; then
+  IM=(magick); IMID=(magick identify); im_kind="ImageMagick 7 (magick)"
+elif command -v convert >/dev/null 2>&1; then
+  IM=(convert); IMID=(identify);      im_kind="ImageMagick 6 (convert)"
+else
+  die "ImageMagick not found (looked for 'magick' and 'convert'). Install it:
+    sudo apt install -y imagemagick"
+fi
+note "Using $im_kind"
 
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 
@@ -52,7 +64,7 @@ work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 # testament, executor, beneficiary, estate, trust, probate, power of attorney — so the tests can prove
 # those queries land, plus the unique OCR-only marker token.
 note "Rendering the scanned-will page image..."
-convert -size 1240x1600 xc:white -gravity north -fill black -pointsize 44 \
+"${IM[@]}" -size 1240x1600 xc:white -gravity north -fill black -pointsize 44 \
   -annotate +0+70 "LAST WILL AND TESTAMENT
 
 OF JANE ARCHIVE DOE
@@ -70,8 +82,8 @@ Document reference: $FIXTURE_TOKEN" \
   "$work/page.png" || die "ImageMagick could not render the page PNG."
 
 # PNG -> JPEG (policy-free coder), then JPEG -> image-only PDF via DCTDecode (pure stdlib).
-convert "$work/page.png" -quality 85 "$work/page.jpg" || die "ImageMagick could not encode the JPEG."
-dims="$(identify -format '%w %h' "$work/page.jpg")" || die "could not read JPEG dimensions."
+"${IM[@]}" "$work/page.png" -quality 85 "$work/page.jpg" || die "ImageMagick could not encode the JPEG."
+dims="$("${IMID[@]}" -format '%w %h' "$work/page.jpg")" || die "could not read JPEG dimensions."
 JW="${dims% *}"; JH="${dims#* }"
 [[ "$JW" =~ ^[0-9]+$ && "$JH" =~ ^[0-9]+$ ]] || die "unexpected JPEG dimensions: '$dims'."
 
@@ -160,7 +172,7 @@ LONG_PAGES="${LONG_PAGES:-25}"
 # render_page <token> <heading> <outfile> — the same OCR-clean layout as the main fixture.
 render_page(){
   local token="$1" heading="$2" dest="$3"
-  convert -size 1240x1600 xc:white -gravity north -fill black -pointsize 44 \
+  "${IM[@]}" -size 1240x1600 xc:white -gravity north -fill black -pointsize 44 \
     -annotate +0+70 "$heading
 
 OF JANE ARCHIVE DOE
@@ -180,7 +192,7 @@ Document reference: $token" \
 ocr_readback(){
   local img="$1" token="$2" png="$work/rb.png"
   command -v tesseract >/dev/null 2>&1 || { note "  (tesseract absent — skipping read-back for $(basename "$img"))"; return 0; }
-  convert "${img}[0]" "$png" 2>/dev/null || { note "  (could not rasterise $(basename "$img") — skipping read-back)"; return 0; }
+  "${IM[@]}" "${img}[0]" "$png" 2>/dev/null || { note "  (could not rasterise $(basename "$img") — skipping read-back)"; return 0; }
   if tesseract "$png" stdout 2>/dev/null | grep -qF "$token"; then
     ok "OCR read-back OK: $(basename "$img") -> $token"
   else
@@ -190,7 +202,7 @@ ocr_readback(){
 
 note "Rendering the TIFF fixture (the FaxImage.tif shape)..."
 render_page "$TOKEN_TIF" "LAST WILL AND TESTAMENT" "$work/tif.png"
-convert "$work/tif.png" -compress lzw "$here/fixtures/will-scanned.tif" \
+"${IM[@]}" "$work/tif.png" -compress lzw "$here/fixtures/will-scanned.tif" \
   || die "ImageMagick could not write the TIFF."
 ocr_readback "$here/fixtures/will-scanned.tif" "$TOKEN_TIF"
 
@@ -200,33 +212,33 @@ render_page "PAGE TWO OF THREE"  "LAST WILL AND TESTAMENT" "$work/fax2.png"
 render_page "$TOKEN_FAX"         "SCHEDULE OF ASSETS"      "$work/fax3.png"
 # A real fax is bilevel Group 4. Fall back to LZW rather than skipping: a multi-page TIFF that is
 # not Group 4 still tests the multi-page path, which is the property that matters most here.
-if ! convert "$work/fax1.png" "$work/fax2.png" "$work/fax3.png" \
+if ! "${IM[@]}" "$work/fax1.png" "$work/fax2.png" "$work/fax3.png" \
        -monochrome -compress Group4 "$here/fixtures/will-scanned-fax.tif" 2>/dev/null; then
   note "  (Group 4 unavailable — falling back to LZW; still multi-page)"
-  convert "$work/fax1.png" "$work/fax2.png" "$work/fax3.png" \
+  "${IM[@]}" "$work/fax1.png" "$work/fax2.png" "$work/fax3.png" \
     -compress lzw "$here/fixtures/will-scanned-fax.tif" || die "could not write the multi-page TIFF."
 fi
-pages="$(identify "$here/fixtures/will-scanned-fax.tif" 2>/dev/null | wc -l)"
+pages="$("${IMID[@]}" "$here/fixtures/will-scanned-fax.tif" 2>/dev/null | wc -l)"
 [ "${pages:-0}" -eq 3 ] || die "the fax TIFF has ${pages:-0} pages, expected 3."
 ok "multi-page fax TIFF written (3 pages, token on the last)"
 
 note "Rendering the GIF fixture (the image001.gif shape)..."
 render_page "$TOKEN_GIF" "LAST WILL AND TESTAMENT" "$work/gif.png"
-convert "$work/gif.png" "$here/fixtures/will-scanned.gif" || die "ImageMagick could not write the GIF."
+"${IM[@]}" "$work/gif.png" "$here/fixtures/will-scanned.gif" || die "ImageMagick could not write the GIF."
 ocr_readback "$here/fixtures/will-scanned.gif" "$TOKEN_GIF"
 
 note "Building the ${LONG_PAGES}-page image-only PDF (token on the last page)..."
 render_page "FILLER PAGE"   "LAST WILL AND TESTAMENT" "$work/long-filler.png"
 render_page "$TOKEN_LONG"   "SCHEDULE OF ASSETS"      "$work/long-final.png"
-convert "$work/long-filler.png" -quality 85 "$work/long-filler.jpg" || die "could not encode filler JPEG."
-convert "$work/long-final.png"  -quality 85 "$work/long-final.jpg"  || die "could not encode final JPEG."
+"${IM[@]}" "$work/long-filler.png" -quality 85 "$work/long-filler.jpg" || die "could not encode filler JPEG."
+"${IM[@]}" "$work/long-final.png"  -quality 85 "$work/long-final.jpg"  || die "could not encode final JPEG."
 # Re-read the dimensions rather than reusing the single-page fixture's. They happen to match today,
 # but a PDF whose MediaBox disagrees with its image renders as a blank or clipped page — which would
 # surface as "OCR cannot read long documents" and send us hunting a Tika timeout that was never there.
-ldims="$(identify -format '%w %h' "$work/long-filler.jpg")" || die "could not read long-page JPEG dimensions."
+ldims="$("${IMID[@]}" -format '%w %h' "$work/long-filler.jpg")" || die "could not read long-page JPEG dimensions."
 LW="${ldims% *}"; LH="${ldims#* }"
 [[ "$LW" =~ ^[0-9]+$ && "$LH" =~ ^[0-9]+$ ]] || die "unexpected long-page dimensions: '$ldims'."
-fdims="$(identify -format '%w %h' "$work/long-final.jpg")" || die "could not read final-page dimensions."
+fdims="$("${IMID[@]}" -format '%w %h' "$work/long-final.jpg")" || die "could not read final-page dimensions."
 [[ "$fdims" == "$ldims" ]] || die "filler and final pages differ in size ($ldims vs $fdims) — the PDF would clip one."
 python3 - "$LW" "$LH" "$work/long-filler.jpg" "$work/long-final.jpg" \
            "$LONG_PAGES" "$here/fixtures/will-scanned-long.pdf" <<'PY'
