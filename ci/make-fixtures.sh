@@ -220,7 +220,15 @@ render_page "FILLER PAGE"   "LAST WILL AND TESTAMENT" "$work/long-filler.png"
 render_page "$TOKEN_LONG"   "SCHEDULE OF ASSETS"      "$work/long-final.png"
 convert "$work/long-filler.png" -quality 85 "$work/long-filler.jpg" || die "could not encode filler JPEG."
 convert "$work/long-final.png"  -quality 85 "$work/long-final.jpg"  || die "could not encode final JPEG."
-python3 - "$JW" "$JH" "$work/long-filler.jpg" "$work/long-final.jpg" \
+# Re-read the dimensions rather than reusing the single-page fixture's. They happen to match today,
+# but a PDF whose MediaBox disagrees with its image renders as a blank or clipped page — which would
+# surface as "OCR cannot read long documents" and send us hunting a Tika timeout that was never there.
+ldims="$(identify -format '%w %h' "$work/long-filler.jpg")" || die "could not read long-page JPEG dimensions."
+LW="${ldims% *}"; LH="${ldims#* }"
+[[ "$LW" =~ ^[0-9]+$ && "$LH" =~ ^[0-9]+$ ]] || die "unexpected long-page dimensions: '$ldims'."
+fdims="$(identify -format '%w %h' "$work/long-final.jpg")" || die "could not read final-page dimensions."
+[[ "$fdims" == "$ldims" ]] || die "filler and final pages differ in size ($ldims vs $fdims) — the PDF would clip one."
+python3 - "$LW" "$LH" "$work/long-filler.jpg" "$work/long-final.jpg" \
            "$LONG_PAGES" "$here/fixtures/will-scanned-long.pdf" <<'PY'
 import sys
 w, h = int(sys.argv[1]), int(sys.argv[2])
