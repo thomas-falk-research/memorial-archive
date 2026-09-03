@@ -50,6 +50,9 @@ die(){ printf '%sFATAL%s %s\n' "$c_r" "$c_0" "$*" >&2; exit 1; }
 mkdir -p "$(dirname "$STATE")" 2>/dev/null
 
 q(){ sudo docker exec "$PG" psql -U "$PSQL_USER" -d "$PSQL_DB" -tAc "$1" 2>/dev/null | tr -d '[:space:]'; }
+# q() collapses ALL whitespace, which is right for a single scalar and wrong for a result set — it
+# ran the source list together as one unreadable string, and would equally have hidden a row.
+qrows(){ sudo docker exec "$PG" psql -U "$PSQL_USER" -d "$PSQL_DB" -tAc "$1" 2>/dev/null | tr -d '\r' | sed '/^[[:space:]]*$/d'; }
 alive(){ sudo docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$PG"; }
 
 # The schema is not documented, so discover the column that identifies a message rather than guessing.
@@ -236,10 +239,10 @@ check)
     say ""
     say "  ingestion sources${statcol:+ (status from $src_tbl.$statcol)}:"
     if [ -n "$statcol" ]; then
-      q "select coalesce(name::text,'?') || '  [' || coalesce($statcol::text,'?') || ']' from $src_tbl order by created_at nulls last" \
+      qrows "select coalesce(name::text,'?') || '  [' || coalesce($statcol::text,'?') || ']' from $src_tbl order by created_at nulls last" \
         | sed 's/^/    /'
     else
-      q "select coalesce(name::text,'?') from $src_tbl order by 1" | sed 's/^/    /'
+      qrows "select coalesce(name::text,'?') from $src_tbl order by 1" | sed 's/^/    /'
     fi
 
     # Messages attributed to each source, when the schema records it. This is what turns "the total
@@ -251,7 +254,7 @@ check)
     if [ -n "$srccol" ]; then
       say ""
       say "  messages per source (archived_emails.$srccol):"
-      q "select coalesce(s.name::text,'?') || '  ' || count(e.*) from $src_tbl s
+      qrows "select coalesce(s.name::text,'?') || '  ' || count(e.*) from $src_tbl s
            left join archived_emails e on e.$srccol = s.id group by s.name order by s.name" | sed 's/^/    /'
       say ""
       say "  Reading a MERGE test: the merge source appearing here with 0 messages while the total"
@@ -278,9 +281,49 @@ check)
   say "  If the count barely moves, merge deduplicates. If it jumps by the mailbox's full message"
   say "  count, it does not, and duplication is simply the price of completeness."
   ;;
+merge-overlap)
+  # THE HALF THE IDENTICAL-FILE TEST CANNOT REACH.
+  #
+  # Re-importing a byte-identical mailbox with merge checked added 0 messages. That proves merge
+  # SKIPS duplicates. It cannot prove merge ADDS what is new, because there was nothing new in it.
+  #
+  # For 75 backup generations that is the only question that matters. If merge decides at the
+  # mailbox level — "this file looks imported, skip it" — then merging the 2013 archive would drop
+  # the 280 messages that exist nowhere else, silently, which is precisely the loss §7c exists to
+  # prevent. Wrong in the safe direction costs duplicates; wrong in this direction costs evidence.
+  #
+  # A and B overlap partially and the expected answer is arithmetic, not judgement.
+  hdr "MERGE + PARTIAL OVERLAP — does merge ADD what is new?"
+  say "  A: $(basename "$A")"
+  say "  B: $(basename "$B")"
+  say ""
+  say "  Measured previously (§7c): A = 610 messages, B = 610, 330 shared."
+  say "  So B carries 280 messages that A does not have."
+  say ""
+  stage_or_accept "$A" || die "staging A failed"
+  stage_or_accept "$B" || die "staging B failed"
+  hdr "NOW, IN THE UI — two imports, in this order"
+  say "  1. New source, Provider PST Import, Local Path /import/$(basename "$A")"
+  printf '     %sPreserve Original File = CHECKED   ·   Merge into existing = UNCHECKED%s\n' "$c_g" "$c_0"
+  say "     wait for it to finish, then:  bash ${0##*/} check     (expect about 610)"
+  say ""
+  say "  2. New source, Provider PST Import, Local Path /import/$(basename "$B")"
+  printf '     %sPreserve Original File = CHECKED   ·   Merge into existing = CHECKED%s\n' "$c_g" "$c_0"
+  printf '     %sMerge target = the source you created in step 1%s\n' "$c_g" "$c_0"
+  say "     wait for it to finish, then:  bash ${0##*/} check"
+  hdr "HOW TO READ THE SECOND NUMBER"
+  printf '  %s~890%s  merge adds the new and skips the shared. Create all 75 with merge — completeness\n' "$c_g" "$c_0"
+  say "        AND one clean archive."
+  printf '  %s~610%s  MERGE SKIPPED THE WHOLE MAILBOX. Do NOT use merge for the 75: it would discard\n' "$c_r" "$c_0"
+  say "        the 280 messages that exist nowhere else. Import as separate sources (§7c)."
+  printf '  %s~1220%s merge did not deduplicate here at all. Harmless — duplication is the price §7c\n' "$c_y" "$c_0"
+  say "        already agreed to pay."
+  say ""
+  say "  Anything else: stop and work out what happened before deciding for 75 mailboxes."
+  ;;
 reset) : >"$STATE"; ok "cleared $STATE (the app and its data were not touched)" ;;
 *)
-  say "Usage: ${0##*/} [step1|step2|adopt-a|step3|check|reset]"
+  say "Usage: ${0##*/} [step1|step2|adopt-a|step3|check|merge-overlap|reset]"
   say ""
   say "  adopt-a: use when mailbox A was already imported outside this flow (creating an"
   say "           ingestion source starts the import immediately)."

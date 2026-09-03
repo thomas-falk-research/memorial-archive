@@ -791,6 +791,50 @@ Evidence that this is not theoretical: one snippet from our own clean fixture re
 
 ---
 
+## 7j. MEASURED on v0.6.0: merge DOES deduplicate — and the half we have not proved
+
+**Re-importing a byte-identical mailbox with "Merge into existing ingestion" CHECKED added zero
+messages.** The evidence is not the flat total on its own — that is equally what an import which
+never ran looks like — but the total together with the source record:
+
+| Source | Status | Messages contributed |
+|---|---|---|
+| `ZZ-SYNTHETIC-VERIFY-v0.6.0` | imported | 6 |
+| `ZZ-SYNTHETIC-MERGE-TEST` | **imported** | **0** |
+
+It ran to completion and contributed nothing. Merge skips duplicates. §7c's finding stands
+unchanged for *separate* sources — that path still stores both copies; merge is the difference.
+
+The dialog also settles the shape for a batch driver: **merge targets a specific parent source**,
+chosen from a dropdown labelled with its provider type. Seventy-five mailboxes would be one source
+created normally and seventy-four created with `merge → target = source #1`.
+
+### The half this cannot prove, and why it decides the 75
+
+The test mailbox was byte-identical. It proves merge **skips what it already has**. It says nothing
+about whether merge **adds what is new** — there was nothing new in it to add.
+
+For backup generations that is the only question that matters. If merge decides at the mailbox level
+— *this file looks imported, skip it* — then merging the July 2013 archive would silently drop the
+**280 messages that exist nowhere else** (§7c). That is precisely the loss the whole import-all-75
+decision exists to prevent, and it would happen quietly, in the name of cleanliness.
+
+**`dedup-experiment.sh merge-overlap`** settles it with the two archives whose overlap is already
+measured: A = 610, B = 610, 330 shared. Import A alone, then B with merge targeting A. The expected
+answer is arithmetic, not judgement:
+
+| Result | Meaning |
+|---|---|
+| **~890** | merge adds the new and skips the shared → create all 75 with merge; completeness *and* a clean archive |
+| **~610** | merge skipped the whole mailbox → **do NOT use merge for the 75**; it would discard the 280 |
+| **~1220** | no deduplication here → harmless; duplication is the price §7c already agreed to pay |
+
+**Not a blocker for the hunt.** `Law.biz.pst` is a single source and needs no merge. Until 890 is
+observed, the safe default is §7c as written: separate sources, accept duplication. Wrong in that
+direction costs duplicate search hits; wrong in the other costs evidence.
+
+---
+
 ## 8. Sources
 
 - LogicLabs-OU/OpenArchiver `docs/user-guides/searching.md` — from/exclude-sender, to/Cc/Bcc, mailboxes,
