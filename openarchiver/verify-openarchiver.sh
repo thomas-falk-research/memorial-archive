@@ -349,8 +349,18 @@ gate_ocr(){
   say "    format the index cannot read produces confident, empty searches over documents that"
   say "    are actually there. That is worse than knowing it does not work."
   say ""
-  say "  If the API is reachable without a login, each token can be checked directly:"
-  say "    curl -s '$BASE_URL/v1/search?keywords=OCRTIFFMARKER&searchIn=attachment_content' | head -c 400"
+  say "  ${c_b}Use the UI for this.${c_0} The published port is the FRONTEND; the backend API listens on"
+  say "  :4000 and is not published, so curling a /v1/... path against it returns the SvelteKit app"
+  say "  shell — an HTML page, HTTP 200, for every query. That looks like an answer and is not one."
+  say "  Reading it as 'token not found' would report OCR as totally blind when nothing was asked."
+  say ""
+  say "  If you do want to script it, find the real path and read the STATUS, not just the body:"
+  say "    for p in /api/v1/search /v1/search; do"
+  say "      curl -s -o /tmp/oa-probe -w \"%{http_code} \$p\\n\" \\"
+  say "        \"$BASE_URL\$p?keywords=OCRTIFFMARKER&searchIn=attachment_content\"; done"
+  say "    head -c 200 /tmp/oa-probe"
+  say "  A 200 whose body starts with '<!doctype html>' is the frontend, not the API. A 401 means"
+  say "  the endpoint is right and needs a session — which the UI already has."
 }
 
 # ------------------------------------------------------------------------------------------------
