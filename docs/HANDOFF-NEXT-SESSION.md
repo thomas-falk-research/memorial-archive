@@ -19,7 +19,8 @@ pointed at the mailboxes that would contain them.
 
 ## What is running now
 
-**Open Archiver v0.5.2** at `/srv/apps/openarchiver`, 5 containers, loopback-bound on `127.0.0.1:3010`.
+**Open Archiver** at `/srv/apps/openarchiver`, 5 containers. Recorded pin: **v0.6.0**
+(released 2026-08-24). A box still running v0.5.2 keeps it until deliberately upgraded — see §7h.
 Admin account created. Reached from the Mac by SSH tunnel:
 
 ```bash
@@ -96,78 +97,83 @@ staged at `/srv/apps/openarchiver/import/Law.biz.pst`, not yet imported.
 
 ## Next actions, in order
 
-The order matters more than usual here: step 3 needs the test data that step 5 destroys, and step 6
-changes how the app is reached, so everything is verified once on the final configuration in step 7.
+**The order changed when v0.6.0 landed.** `textExtractor.ts` was rewritten in that release, so an
+OCR answer from v0.5.2 says nothing about the version we will actually run — and the same goes for
+merge/dedup behaviour. Both now run **after** the upgrade. There are two wipes on purpose: the
+second is seconds long because the store only holds test data, and it buys a genuinely clean start
+for the real ingestion.
 
 ```bash
 # 1. SYNC — the box must be running the reviewed code
-cd ~/memorial-archive
-git fetch origin && git checkout main && git pull --ff-only origin main
+cd ~/memorial-archive && git fetch origin && git checkout main && git pull --ff-only origin main
 
-# 2. GROUND TRUTH — read-only, changes nothing, answers every open question in one pass
+# 2. GROUND TRUTH — read-only, changes nothing
 bash openarchiver/preflight.sh
 
-# 3. CLOSE THE LOCKOUT GATE — hard blocker; ENCRYPTION_KEY / STORAGE_ENCRYPTION_KEY cannot be
-#    regenerated, and every message imported before they are safe is lost if this box dies.
-#    NOTE: `ssh HOST 'sudo cat .../.env'` fails with "a terminal is required to authenticate",
-#    and `ssh -t` silently rewrites LF to CRLF. Stage an owned copy on the box instead:
+# 3. CLOSE THE LOCKOUT GATE — hard blocker. ENCRYPTION_KEY / STORAGE_ENCRYPTION_KEY cannot be
+#    regenerated. `ssh HOST 'sudo cat .../.env'` fails ("a terminal is required"), and `ssh -t`
+#    silently rewrites LF to CRLF — stage an owned copy on the box instead.
 bash openarchiver/backup-env.sh                      # digest + the exact commands
-#    on the box:   sudo install -m 600 -o "$USER" /srv/apps/openarchiver/.env ~/openarchiver-env-backup.txt
+sudo install -m 600 -o "$USER" /srv/apps/openarchiver/.env ~/openarchiver-env-backup.txt
 #    from the Mac: scp archive-pc:~/openarchiver-env-backup.txt ~/openarchiver-env-backup.txt
-bash openarchiver/backup-env.sh verify ~/openarchiver-env-backup.txt --expect DIGEST
-#    then remove the staging copy from the box:  rm ~/openarchiver-env-backup.txt
-bash openarchiver/preflight.sh --env-backup-verified DIGEST     # re-checks against the LIVE file
+#                  then the self-checking one-liner backup-env printed
+rm ~/openarchiver-env-backup.txt                     # once it MATCHES
+bash openarchiver/preflight.sh --env-backup-verified DIGEST
 
-# 4. FINISH THE EXPERIMENTS — must happen BEFORE the wipe; it needs the test data
-bash openarchiver/dedup-experiment.sh check          # record the numbers
-#    then: new source -> an ALREADY-IMPORTED mailbox, "Merge into existing" CHECKED
-bash openarchiver/dedup-experiment.sh check          # count barely moves = merge dedupes
-
-# 5. PROVE OCR ON THE FORMATS WE ARE ACTUALLY HUNTING — blocker for the real import
-bash ci/make-fixtures.sh                             # needs ImageMagick + tesseract
-bash openarchiver/verify-openarchiver.sh ocr         # import once, then search EVERY token listed
-
-# 6. CLEAN SLATE (destructive — confirm first). The store is DERIVED; .env survives, so the
-#    secrets are untouched and nothing real is lost. Cleaner than fighting ENABLE_DELETION.
+# 4. CLEAN SLATE #1 (destructive). Removes the volumes, NOT .env — the keys survive, so the
+#    upgrade's additive migrations run on an empty schema and rollback stays cheap.
 cd /srv/apps/openarchiver && sudo docker compose down -v
 
-# 7. NETWORK CUTOVER + REBUILD, together — both need a restart, so verify once afterwards.
-#    EITHER the tailnet (direct, no Caddy, no DNS — reachable from your own devices only):
-bash ~/memorial-archive/archive-openarchiver-setup.sh --tailscale
-#    OR the mail.home front door via Caddy (needs the DNS rewrite to resolve):
-#      OPENARCHIVER_URL=http://mail.home bash ~/memorial-archive/archive-openarchiver-setup.sh
-#      bash ~/memorial-archive/archive-proxy-setup.sh
-#    Either way it is a CUTOVER: the previous URL stops being a valid origin.
+# 5. DEPLOY v0.6.0 + the network cutover together — one restart, verified once afterwards
+cd ~/memorial-archive
+bash archive-openarchiver-setup.sh --tailscale       # v0.6.0 is now the recorded pin
+#    (or, for the Caddy front door instead of the tailnet:)
+#      OPENARCHIVER_URL=http://mail.home bash archive-openarchiver-setup.sh && bash archive-proxy-setup.sh
+#    Recreate the admin account — the wipe took the database with it.
 
-# 8. RE-VERIFY EVERYTHING on the final configuration
+# 6. RE-VERIFY EVERYTHING on v0.6.0. The OCR gate especially: its extraction path was rewritten.
 bash openarchiver/verify-openarchiver.sh harden
 bash openarchiver/verify-openarchiver.sh egress
-bash openarchiver/verify-openarchiver.sh ocr
+bash ci/make-fixtures.sh
+bash openarchiver/verify-openarchiver.sh ocr         # import once, then search ALL FIVE tokens
 bash openarchiver/preflight.sh --env-backup-verified DIGEST
+
+# 7. THE MERGE QUESTION, on v0.6.0 — decides how the 75 sources get created
+bash openarchiver/dedup-experiment.sh step1          # stages + imports archive A
+bash openarchiver/dedup-experiment.sh step2          # then B as a SEPARATE source
+bash openarchiver/dedup-experiment.sh step3          # verdict
+#    then re-import an already-imported mailbox with "Merge into existing" CHECKED:
+bash openarchiver/dedup-experiment.sh check          # count barely moves = merge dedupes
+
+# 8. CLEAN SLATE #2 — seconds; the store holds only test data, and the real run starts clean
+cd /srv/apps/openarchiver && sudo docker compose down -v
+cd ~/memorial-archive && bash archive-openarchiver-setup.sh --tailscale
 
 # 9. THE REAL IMPORT — Law.biz.pst. Highest-probability target AND the OCR-heavy timing
 #    measurement. PST Import / Local Path / /import/Law.biz.pst
-#    Preserve Original File = CHECKED   ·   Merge into existing = per step 4's answer
+#    Preserve Original File = CHECKED   ·   Merge into existing = per step 7's answer
 #    Watch:  watch -n5 free -h   ·   sudo docker compose logs -f open-archiver
 
 # 10. THE HUNT — attachment content ON, 2009 date range
 #     Ratliff · "Northern Trust" · Hartigan Kenilworth · "December 5" · "small estate affidavit"
 
-# 11. PROVE THE APP LEFT THE MASTERS' COPIES ALONE
+# 11. PROVE THE APP LEFT THE STAGED COPIES ALONE
 bash openarchiver/verify-openarchiver.sh staged
 
 # 12. Then work down the tiers
 bash openarchiver/inventory-mailboxes.sh
 ```
 
-**Step 6 is the only destructive step.** `down -v` removes the Docker volumes (Postgres, Meilisearch,
-the message store) but **not** `/srv/apps/openarchiver/.env`, so the encryption keys survive and the
-re-run reuses them. Everything currently stored is synthetic or test data. Doing it this way avoids
-temporarily re-enabling `ENABLE_DELETION` and leaves no half-deleted sources behind.
+**Steps 4 and 8 are the destructive ones.** `down -v` removes the Docker volumes (Postgres,
+Meilisearch, the message store) but **not** `/srv/apps/openarchiver/.env` — the encryption keys
+survive and the redeploy reuses them. Everything stored at that point is synthetic or test data, and
+the store is derived anyway. Doing it this way avoids temporarily re-enabling `ENABLE_DELETION` and
+leaves no half-deleted sources behind. It also costs the admin account each time; recreate it
+promptly, before the address is shared.
 
-**Step 7 is a cutover, not an addition.** Once `ORIGIN`/`APP_URL` point at `mail.home`, the
-`127.0.0.1:8931` SSH tunnel stops being a valid origin and logins through it will fail. Do not start
-it until preflight section G shows a real (non-link-local) LAN address.
+**Step 5 is a cutover, not an addition.** Once `ORIGIN`/`APP_URL` move, the previous URL stops being
+a valid origin and logins through it fail. `--tailscale` moves the bind and `ORIGIN` together and
+refuses to run if they disagree.
 
 **If the hunt comes up dry in the law mailbox**, the tier order is: `historical.pst` (2.1 GB, 7
 locations) → `archive*.pst` → `personal.pst` → `Outlook MKH.pst`/`Outlook1.pst` → carved Hitachi

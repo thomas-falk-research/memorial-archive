@@ -60,7 +60,7 @@ OA_EMAIL_CONCURRENCY="${OA_EMAIL_CONCURRENCY:-3}"
 # not a practical limit for anything in this archive — but it IS a truncation knob, so it is written
 # explicitly rather than left to a default that could change under us.
 OA_MAX_TEXT_BYTES="${OA_MAX_TEXT_BYTES:-1000000}"
-FALLBACK_VERSION="v0.5.2"                          # recorded pin; audited by ci/version-audit.sh
+FALLBACK_VERSION="v0.6.0"                          # recorded pin; audited by ci/version-audit.sh
 DOCKER_NET="${ARCHIVE_DOCKER_NET:-memorial}"
 BASE_DOMAIN="${BASE_DOMAIN:-home}"
 
@@ -117,6 +117,33 @@ fi
 # an explicit OPENARCHIVER_URL; otherwise whatever the install already answers on is preserved.
 OPENARCHIVER_URL_REQUESTED="${OPENARCHIVER_URL:-}"
 
+
+# registry_latest_tag <repo> — newest vN.N.N tag in the container registry, which is what actually
+# gets pulled. Independent of git, so it corroborates rather than echoes.
+registry_latest_tag(){
+  command -v curl >/dev/null 2>&1 || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+  local url="https://hub.docker.com/v2/repositories/$1/tags?page_size=100"
+  local page=0 tmp; tmp="$(mktemp -d)" || return 0
+  while [[ -n "$url" && "$page" -lt 5 ]]; do
+    curl -s --max-time 30 "$url" -o "$tmp/p.json" 2>/dev/null || break
+    [[ -s "$tmp/p.json" ]] || break
+    python3 - "$tmp/p.json" "$tmp/names" "$tmp/next" <<'PYEOF' 2>/dev/null || break
+import json, sys
+d = json.load(open(sys.argv[1]))
+open(sys.argv[2], "a").write("\n".join(r.get("name", "") for r in d.get("results", [])) + "\n")
+open(sys.argv[3], "w").write(d.get("next") or "")
+PYEOF
+    url="$(cat "$tmp/next" 2>/dev/null)"
+    page=$((page+1))
+  done
+  local out=""
+  [[ -s "$tmp/names" ]] && out="$(grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' "$tmp/names" | sort -V | tail -1)"
+  rm -rf "$tmp"
+  [[ -n "$out" ]] && printf '%s' "$out"
+  return 0
+}
+
 sudo -v
 sudo docker info >/dev/null 2>&1 || die "Docker isn't available/running. Run provision.sh (and start Docker) first."
 
@@ -141,17 +168,37 @@ version_source=""
 if [[ -n "$OPENARCHIVER_VERSION" ]]; then
   version_source="requested explicitly"
 elif [[ "$ALLOW_UPGRADE" == true ]]; then
-  info "Resolving the latest Open Archiver release..."
-  OPENARCHIVER_VERSION="$(git ls-remote --tags --refs https://github.com/LogicLabs-OU/OpenArchiver 'v*' 2>/dev/null \
+  info "Resolving the latest Open Archiver release (asking git AND the registry)..."
+  # ONE source is not enough. A `git ls-remote` in this project returned v0.5.2 as newest while
+  # v0.6.0 had been released eleven days earlier — a cached answer. In a reporting script that is a
+  # wrong sentence; here it would INSTALL the wrong version while announcing an upgrade. So both are
+  # asked, and a disagreement stops the run rather than picking a winner.
+  git_latest="$(git ls-remote --tags --refs https://github.com/LogicLabs-OU/OpenArchiver 'v*' 2>/dev/null \
     | awk -F/ '{print $NF}' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)"
-  version_source="latest upstream"
-  [[ -n "$OPENARCHIVER_VERSION" ]] || { OPENARCHIVER_VERSION="$FALLBACK_VERSION"; version_source="pinned fallback"; warn "Release lookup failed; using ${OPENARCHIVER_VERSION}."; }
+  reg_latest="$(registry_latest_tag "$OPENARCHIVER_IMAGE")"
+
+  if [[ -n "$git_latest" && -n "$reg_latest" && "$git_latest" != "$reg_latest" ]]; then
+    die "the two sources disagree on the latest release — one of them is stale.
+    git tags say    : ${git_latest}
+    the registry says: ${reg_latest}
+    Refusing to guess which is right. Re-run in a minute, or name the version outright:
+        OPENARCHIVER_VERSION=${reg_latest} bash ${0##*/}"
+  elif [[ -n "$reg_latest" && -n "$git_latest" ]]; then
+    OPENARCHIVER_VERSION="$reg_latest"; version_source="latest upstream (git and registry agree)"
+  elif [[ -n "$reg_latest" || -n "$git_latest" ]]; then
+    OPENARCHIVER_VERSION="${reg_latest:-$git_latest}"
+    version_source="latest upstream (only one source answered)"
+    warn "Only one of git/registry answered. That is how a stale tag list got believed once already."
+  else
+    OPENARCHIVER_VERSION="$FALLBACK_VERSION"; version_source="pinned fallback"
+    warn "Release lookup failed on both sources; using ${OPENARCHIVER_VERSION}."
+  fi
 elif [[ -n "$installed_tag" ]]; then
   OPENARCHIVER_VERSION="$installed_tag"; version_source="already installed (no drift; use --upgrade to advance)"
 else
   OPENARCHIVER_VERSION="$FALLBACK_VERSION"; version_source="pinned default for a fresh install"
 fi
-# This project's IMAGE tags keep the leading 'v' (unlike Paperless/Docmost), e.g. v0.5.2.
+# This project's IMAGE tags keep the leading 'v' (unlike Paperless/Docmost), e.g. v0.6.0.
 OPENARCHIVER_VERSION="v${OPENARCHIVER_VERSION#v}"
 IMAGE_TAG="$OPENARCHIVER_VERSION"
 
