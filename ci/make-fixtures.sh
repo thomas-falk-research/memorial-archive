@@ -58,6 +58,33 @@ else
 fi
 note "Using $im_kind"
 
+
+# no_host_metadata <file...> — a fixture is committed to a git repository, so it must carry nothing
+# about the machine that produced it: no ImageMagick version, no hostname, no home directory, no
+# temp path. `-strip` is supposed to remove all of that; this proves it did, because "supposed to"
+# has never been evidence in this project.
+#
+# Only patterns of 6+ characters are searched. These files are lossy image entropy, and short
+# strings occur in them by chance — the committed PDF already contains the byte sequence "o.MTom"
+# purely at random inside its JPEG data. A guard that fires on coincidence gets switched off.
+no_host_metadata(){
+  local f pat hits="" pats=()
+  [ -n "${HOSTNAME:-}" ] && pats+=("$HOSTNAME")
+  pats+=("ImageMagick" "$(hostname 2>/dev/null)" "$HOME" "/tmp/tmp." "${USER:-}")
+  for f in "$@"; do
+    [ -s "$f" ] || continue
+    for pat in "${pats[@]}"; do
+      [ "${#pat}" -ge 6 ] || continue
+      LC_ALL=C grep -aqF -- "$pat" "$f" 2>/dev/null && hits="$hits $(basename "$f"):$pat"
+    done
+  done
+  if [ -n "$hits" ]; then
+    die "a fixture carries host metadata and must not be committed:$hits
+    These files go into a git repository. Regenerate with -strip, or remove the offending tag."
+  fi
+  ok "no host metadata in any fixture (no version string, hostname, home path or temp path)"
+}
+
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 
 # The page text. It deliberately contains the everyday vocabulary the family will search for — will,
@@ -82,7 +109,7 @@ Document reference: $FIXTURE_TOKEN" \
   "$work/page.png" || die "ImageMagick could not render the page PNG."
 
 # PNG -> JPEG (policy-free coder), then JPEG -> image-only PDF via DCTDecode (pure stdlib).
-"${IM[@]}" "$work/page.png" -quality 85 "$work/page.jpg" || die "ImageMagick could not encode the JPEG."
+"${IM[@]}" "$work/page.png" -strip -quality 85 "$work/page.jpg" || die "ImageMagick could not encode the JPEG."
 dims="$("${IMID[@]}" -format '%w %h' "$work/page.jpg")" || die "could not read JPEG dimensions."
 JW="${dims% *}"; JH="${dims#* }"
 [[ "$JW" =~ ^[0-9]+$ && "$JH" =~ ^[0-9]+$ ]] || die "unexpected JPEG dimensions: '$dims'."
@@ -214,7 +241,7 @@ ocr_readback(){
 
 note "Rendering the TIFF fixture (the FaxImage.tif shape)..."
 render_page "$TOKEN_TIF" "LAST WILL AND TESTAMENT" "$work/tif.png"
-"${IM[@]}" "$work/tif.png" -compress lzw "$here/fixtures/will-scanned.tif" \
+"${IM[@]}" "$work/tif.png" -strip -compress lzw "$here/fixtures/will-scanned.tif" \
   || die "ImageMagick could not write the TIFF."
 ocr_readback "$here/fixtures/will-scanned.tif" "$TOKEN_TIF"
 
@@ -227,11 +254,11 @@ render_page "$TOKEN_FAX"         "SCHEDULE OF ASSETS"      "$work/fax3.png"
 fax_out="$here/fixtures/will-scanned-fax.tif"
 fax_kind="Group 4"
 if ! "${IM[@]}" "$work/fax1.png" "$work/fax2.png" "$work/fax3.png" \
-       -monochrome -compress Group4 "$fax_out" 2>/dev/null; then
+       -strip -monochrome -compress Group4 "$fax_out" 2>/dev/null; then
   note "  (Group 4 unavailable — falling back to LZW; still multi-page)"
   fax_kind="LZW"
   "${IM[@]}" "$work/fax1.png" "$work/fax2.png" "$work/fax3.png" \
-    -compress lzw "$fax_out" || die "could not write the multi-page TIFF."
+    -strip -compress lzw "$fax_out" || die "could not write the multi-page TIFF."
 fi
 # Group 4 is bilevel, so -monochrome thresholds an antialiased render. That can thin the glyphs
 # enough that tesseract loses them — and an illegible page 3 would surface downstream as "only the
@@ -242,7 +269,7 @@ if ! readback_ok "$fax_out" 2 "$TOKEN_FAX"; then
   note "  (page 3 illegible after $fax_kind encoding — rebuilding as LZW to preserve legibility)"
   fax_kind="LZW"
   "${IM[@]}" "$work/fax1.png" "$work/fax2.png" "$work/fax3.png" \
-    -compress lzw "$fax_out" || die "could not write the multi-page TIFF."
+    -strip -compress lzw "$fax_out" || die "could not write the multi-page TIFF."
 fi
 pages="$("${IMID[@]}" "$fax_out" 2>/dev/null | wc -l)"
 [ "${pages:-0}" -eq 3 ] || die "the fax TIFF has ${pages:-0} pages, expected 3."
@@ -251,14 +278,14 @@ ok "multi-page fax TIFF written (3 pages, $fax_kind, token on the last)"
 
 note "Rendering the GIF fixture (the image001.gif shape)..."
 render_page "$TOKEN_GIF" "LAST WILL AND TESTAMENT" "$work/gif.png"
-"${IM[@]}" "$work/gif.png" "$here/fixtures/will-scanned.gif" || die "ImageMagick could not write the GIF."
+"${IM[@]}" "$work/gif.png" -strip "$here/fixtures/will-scanned.gif" || die "ImageMagick could not write the GIF."
 ocr_readback "$here/fixtures/will-scanned.gif" "$TOKEN_GIF"
 
 note "Building the ${LONG_PAGES}-page image-only PDF (token on the last page)..."
 render_page "FILLER PAGE"   "LAST WILL AND TESTAMENT" "$work/long-filler.png"
 render_page "$TOKEN_LONG"   "SCHEDULE OF ASSETS"      "$work/long-final.png"
-"${IM[@]}" "$work/long-filler.png" -quality 85 "$work/long-filler.jpg" || die "could not encode filler JPEG."
-"${IM[@]}" "$work/long-final.png"  -quality 85 "$work/long-final.jpg"  || die "could not encode final JPEG."
+"${IM[@]}" "$work/long-filler.png" -strip -quality 85 "$work/long-filler.jpg" || die "could not encode filler JPEG."
+"${IM[@]}" "$work/long-final.png"  -strip -quality 85 "$work/long-final.jpg"  || die "could not encode final JPEG."
 # Re-read the dimensions rather than reusing the single-page fixture's. They happen to match today,
 # but a PDF whose MediaBox disagrees with its image renders as a blank or clipped page — which would
 # surface as "OCR cannot read long documents" and send us hunting a Tika timeout that was never there.
@@ -339,6 +366,9 @@ if command -v pdfinfo >/dev/null 2>&1; then
   ok "long PDF really has $npg pages"
 fi
 ok "wrote will-scanned-long.pdf (${LONG_PAGES} pages, token only on the last)"
+
+no_host_metadata "$out" "$here/fixtures/will-scanned.tif" "$here/fixtures/will-scanned-fax.tif" \
+                 "$here/fixtures/will-scanned.gif" "$here/fixtures/will-scanned-long.pdf"
 
 printf '\n'
 ok "Format fixtures written to $here/fixtures/:"
