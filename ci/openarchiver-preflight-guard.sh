@@ -67,7 +67,17 @@ exit 0
 S
 cat >"$STUBS/curl" <<'S'
 #!/usr/bin/env bash
-cat "$STUB_STATE/http"
+# URL-AWARE on purpose. A stub that answers 200 for any URL cannot catch a probe aimed at the wrong
+# address — and that is precisely the bug that shipped: the host-side probe was hard-coded to
+# 127.0.0.1, so after the tailnet cutover it reported a healthy app as dead.
+url=""
+for a in "$@"; do case "$a" in http://*) url="$a" ;; esac; done
+exp="$(cat "$STUB_STATE/expect_url" 2>/dev/null)"
+if [ -n "$exp" ] && [ -n "$url" ]; then
+  case "$url" in "$exp"*) cat "$STUB_STATE/http" ;; *) echo 000 ;; esac
+else
+  cat "$STUB_STATE/http"
+fi
 S
 cat >"$STUBS/hostname" <<'S'
 #!/usr/bin/env bash
@@ -156,10 +166,13 @@ services:
         target: /import
         read_only: true
 C
+  echo "http://127.0.0.1:3010" >"$STATE/expect_url"
   cat >"$APP/docker-compose.yml" <<'C'
 services:
   open-archiver:
     image: logiclabshq/open-archiver:v0.5.2
+    ports:
+      - "127.0.0.1:3010:3000"
 C
   cat >"$APP/.env" <<'E'
 NODE_ENV=production
@@ -351,6 +364,38 @@ if printf '%s' "$noroute_out" | grep -qF "not stood up yet"; then
   ok "a Caddyfile without the mail route is reported as not stood up"
 else
   bad "a missing mail route was not reported"; rc=1
+fi
+reset_healthy
+
+# ------------------------------------------------------------------------------------------------
+hdr "The host-side probe follows the published bind, it does not assume loopback"
+
+# This shipped broken: every host-side probe was hard-coded to 127.0.0.1, so the moment the app was
+# published on the tailnet instead, a perfectly healthy stack reported HTTP 000 and the egress gate
+# refused to run. A check that fails for a reason unrelated to what it is testing is worse than no
+# check, because it sends you debugging the wrong thing.
+sed -i 's|"127.0.0.1:3010:3000"|"100.64.0.1:3010:3000"|' "$APP/docker-compose.yml"
+echo "http://100.64.0.1:3010" >"$STATE/expect_url"
+cases=$((cases+1))
+tn_out="$(run_preflight)"
+if printf '%s' "$tn_out" | grep -qF "frontend answers at http://100.64.0.1:3010"; then
+  ok "a tailnet-published app is probed at its tailnet address, not loopback"
+else
+  bad "the probe did not follow the published bind"
+  printf '%s\n' "$tn_out" | grep -iE 'frontend' | sed 's/^/      /'
+  rc=1
+fi
+
+# ...and it must still notice a genuinely dead app. Bind says tailnet, nothing answers there.
+echo "http://127.0.0.1:3010" >"$STATE/expect_url"
+cases=$((cases+1))
+dead_out="$(run_preflight)"; dead_status=$?
+if [ "$dead_status" -eq 1 ] && printf '%s' "$dead_out" | grep -qF "frontend not answering at http://100.64.0.1:3010"; then
+  ok "an app not answering on its published bind is still reported as down"
+else
+  bad "a genuinely unreachable app was not reported"
+  printf '%s\n' "$dead_out" | grep -iE 'frontend' | sed 's/^/      /'
+  rc=1
 fi
 reset_healthy
 

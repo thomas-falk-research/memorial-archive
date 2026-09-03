@@ -122,6 +122,23 @@ PYEOF
   [ -n "$out" ] && printf '%s' "$out"
 }
 
+
+# app_base_url — where the app is reachable FROM THIS HOST, read from the deployed compose rather
+# than assumed.
+#
+# This used to be hard-coded to 127.0.0.1. Once the tailnet bind option existed, the app stopped
+# being on loopback and every host-side probe reported a perfectly healthy stack as dead (HTTP 000)
+# — a check failing for a reason that has nothing to do with the property it is testing, which is
+# the most expensive kind of wrong answer. The published bind is the authority, so ask it.
+app_base_url(){
+  local b p
+  b="$(sudo sed -n 's/.*"\([0-9.]*\):\([0-9]*\):3000".*/\1/p' "$APP_DIR/docker-compose.yml" 2>/dev/null | head -1)"
+  p="$(sudo sed -n 's/.*"\([0-9.]*\):\([0-9]*\):3000".*/\2/p' "$APP_DIR/docker-compose.yml" 2>/dev/null | head -1)"
+  [ -n "$b" ] || b="127.0.0.1"
+  [ -n "$p" ] || p="$PORT"
+  printf 'http://%s:%s' "$b" "$p"
+}
+
 dk(){ sudo docker "$@" 2>/dev/null; }
 q(){ sudo docker exec "$PG" psql -U "$PSQL_USER" -d "$PSQL_DB" -tAc "$1" 2>/dev/null | tr -d '\r'; }
 q1(){ q "$1" | head -1 | tr -d '[:space:]'; }
@@ -286,10 +303,11 @@ s.on(\"connect\",()=>d(\"UP\"));s.on(\"error\",()=>d(\"DOWN\"));s.on(\"timeout\"
     *)    unk "could not probe the backend from inside openarchiver-app" ;;
   esac
 
-  fe="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://127.0.0.1:$PORT/" 2>/dev/null)"
+  app_url="$(app_base_url)"
+  fe="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$app_url/" 2>/dev/null)"
   case "$fe" in
-    2*|3*|401|403) ok "frontend answers on 127.0.0.1:$PORT (HTTP $fe)" ;;
-    *) bad "frontend not answering on 127.0.0.1:$PORT (HTTP ${fe:-none})" ;;
+    2*|3*|401|403) ok "frontend answers at $app_url (HTTP $fe)" ;;
+    *) bad "frontend not answering at $app_url (HTTP ${fe:-none})" ;;
   esac
 
   if [ "$(q1 'select 1')" = "1" ]; then ok "PostgreSQL reachable"; else bad "cannot query PostgreSQL in $PG"; fi

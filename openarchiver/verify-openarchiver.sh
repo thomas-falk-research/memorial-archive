@@ -37,7 +37,7 @@ set -uo pipefail
 APP_DIR="${OPENARCHIVER_DIR:-/srv/apps/openarchiver}"
 ARCHIVE_ROOT="${ARCHIVE_ROOT:-/srv/archive}"
 PORT="${OPENARCHIVER_PORT:-3010}"
-BASE_URL="${OPENARCHIVER_URL:-http://127.0.0.1:$PORT}"
+BASE_URL=""   # resolved from the deployed compose once APP_DIR is known (see app_base_url)
 FIXTURE="${FIXTURE:-}"                       # image-only PDF; defaults to the repo's committed one
 TOKEN="${TOKEN:-OCRWILLMARKER}"              # appears ONLY inside that image
 WORK="${WORK:-${TMPDIR:-/tmp}/openarchiver-verify}"
@@ -53,6 +53,23 @@ warn(){ printf '  %sWARN%s %s\n' "$c_y" "$c_0" "$*" >&2; }
 die(){ printf '%sFATAL%s %s\n' "$c_r" "$c_0" "$*" >&2; exit 2; }
 
 dc(){ ( cd "$APP_DIR" && sudo docker compose "$@" ); }
+
+# app_base_url — where the app is reachable FROM THIS HOST, read from the deployed compose rather
+# than assumed.
+#
+# This used to be hard-coded to 127.0.0.1. Once the tailnet bind option existed, the app stopped
+# being on loopback and every host-side probe reported a perfectly healthy stack as dead (HTTP 000)
+# — a check failing for a reason that has nothing to do with the property it is testing, which is
+# the most expensive kind of wrong answer. The published bind is the authority, so ask it.
+app_base_url(){
+  local b p
+  b="$(sudo sed -n 's/.*"\([0-9.]*\):\([0-9]*\):3000".*/\1/p' "$APP_DIR/docker-compose.yml" 2>/dev/null | head -1)"
+  p="$(sudo sed -n 's/.*"\([0-9.]*\):\([0-9]*\):3000".*/\2/p' "$APP_DIR/docker-compose.yml" 2>/dev/null | head -1)"
+  [ -n "$b" ] || b="127.0.0.1"
+  [ -n "$p" ] || p="$PORT"
+  printf 'http://%s:%s' "$b" "$p"
+}
+
 
 # bind_ok <ip> — the only two interfaces this stack may publish on.
 #
@@ -75,6 +92,7 @@ fails=0
 
 [ -d "$APP_DIR" ] || die "No install at $APP_DIR — run archive-openarchiver-setup.sh first."
 command -v sudo >/dev/null 2>&1 || die "sudo is required (to read the compose config and containers)."
+BASE_URL="${OPENARCHIVER_URL:-$(app_base_url)}"
 
 # Locate the committed image-only fixture: repo checkout, or next to this script.
 if [ -z "$FIXTURE" ]; then
@@ -352,10 +370,14 @@ gate_egress(){
   say "  containers: $(tr '\n' ' ' <<<"$names")"
 
   local before
-  before="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://127.0.0.1:$PORT/" 2>/dev/null)"
+  say "  probing the app at $BASE_URL (read from the deployed compose, not assumed)"
+  before="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$BASE_URL/" 2>/dev/null)"
   case "$before" in
     2*|3*|401|403) ok "app responds before the cut (HTTP $before)" ;;
-    *) bad "app is not responding (HTTP ${before:-none}) — fix that before testing egress"; fails=$((fails+1)); return 1 ;;
+    *) bad "app is not responding at $BASE_URL (HTTP ${before:-none}) — fix that before testing egress"
+       bad "  if the bind was changed, the app may be on a different address than this probe used:"
+       bad "  $(sudo grep -oE '"[0-9.]+:[0-9]+:3000"' "$APP_DIR/docker-compose.yml" 2>/dev/null | head -1)"
+       fails=$((fails+1)); return 1 ;;
   esac
 
   local net override="$APP_DIR/docker-compose.egress-test.yml"
