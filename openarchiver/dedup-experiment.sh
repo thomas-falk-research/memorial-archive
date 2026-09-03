@@ -215,6 +215,52 @@ check)
   ic="$(get idcol)"; [ -n "$ic" ] || ic="$(id_col || true)"
   cur="$(total)"
   say "  messages archived: ${cur:-unknown}"
+
+  # THE SOURCES, WITH THEIR STATUS. Without this the headline number is ambiguous in the exact case
+  # the experiment exists to settle: after a merge import, "the count did not move" reads as
+  # "merge deduplicated" and as "the import never ran", and those are opposite conclusions. A
+  # completed source that processed N messages while the total stayed flat is evidence; a total
+  # that stayed flat on its own is not.
+  src_tbl=""
+  for t in ingestion_sources ingestionsources sources; do
+    [ "$(q "select count(*) from information_schema.tables where table_name='$t'")" = "1" ] && { src_tbl="$t"; break; }
+  done
+  if [ -z "$src_tbl" ]; then
+    warn "could not find the ingestion-sources table — cannot tell a dedup from an import that never ran"
+  else
+    cols="$(q "select string_agg(column_name,',') from information_schema.columns where table_name='$src_tbl'")"
+    statcol=""
+    for c in status state sync_status last_sync_status; do
+      case ",$cols," in *",$c,"*) statcol="$c"; break ;; esac
+    done
+    say ""
+    say "  ingestion sources${statcol:+ (status from $src_tbl.$statcol)}:"
+    if [ -n "$statcol" ]; then
+      q "select coalesce(name::text,'?') || '  [' || coalesce($statcol::text,'?') || ']' from $src_tbl order by created_at nulls last" \
+        | sed 's/^/    /'
+    else
+      q "select coalesce(name::text,'?') from $src_tbl order by 1" | sed 's/^/    /'
+    fi
+
+    # Messages attributed to each source, when the schema records it. This is what turns "the total
+    # did not move" into a statement about WHERE the messages went.
+    srccol=""
+    for c in ingestion_source_id source_id ingestionSourceId; do
+      [ "$(q "select count(*) from information_schema.columns where table_name='archived_emails' and column_name='$c'")" = "1" ] && { srccol="$c"; break; }
+    done
+    if [ -n "$srccol" ]; then
+      say ""
+      say "  messages per source (archived_emails.$srccol):"
+      q "select coalesce(s.name::text,'?') || '  ' || count(e.*) from $src_tbl s
+           left join archived_emails e on e.$srccol = s.id group by s.name order by s.name" | sed 's/^/    /'
+      say ""
+      say "  Reading a MERGE test: the merge source appearing here with 0 messages while the total"
+      say "  stayed flat is what dedup looks like. The merge source ABSENT, or the total unchanged"
+      say "  with no new source at all, means the import did not run — that is not a result."
+    else
+      warn "archived_emails has no source column — cannot attribute messages to a source"
+    fi
+  fi
   if [ -n "$ic" ]; then
     dg="$(q "select count(*) from (select $ic from archived_emails where $ic is not null group by $ic having count(*)>1) t")"
     wc_="$(q "select max(c) from (select count(*) c from archived_emails where $ic is not null group by $ic) t")"
