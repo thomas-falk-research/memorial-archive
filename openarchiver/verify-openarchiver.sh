@@ -484,13 +484,49 @@ s.on("timeout",()=>done("BLOCKED"));
   #
   # A one-line HTTP/1.0 request over nc answers the actual question — is something serving on
   # :3000 — without interpreting or following anything.
-  local status="" i=0
-  while [ "$i" -lt 12 ]; do
-    status="$(sudo docker run --rm --network "$net" "$probe_img" sh -c \
-      'printf "GET / HTTP/1.0\r\nHost: openarchiver-app\r\nConnection: close\r\n\r\n" \
-         | nc -w 5 openarchiver-app 3000 2>/dev/null | head -1' 2>/dev/null \
-      | grep -oE 'HTTP/1\.[01] [0-9]{3}' | awk '{print $2}')"
+  # Probe with NODE, from the app's own image, run as a SEPARATE container on the cut network.
+  #
+  # Third client, third behaviour. busybox wget followed the app's 307 off the unreachable network.
+  # busybox nc in postgres:17-alpine returned nothing at all. Guessing at a fourth would be the same
+  # mistake again, so this uses the one HTTP client whose behaviour here is known and guaranteed
+  # present: the app image ships node, and node's http.get does NOT follow redirects.
+  #
+  # It is still a genuine network probe — a separate container reaching the app over the cut
+  # network — not the app asked about itself.
+  #
+  # Every method reports what it actually returned, so a future failure names its cause instead of
+  # producing another silent "no response".
+  local app_img status="" i=0 how=""
+  app_img="$(sudo docker inspect openarchiver-app --format '{{.Config.Image}}' 2>/dev/null)"
+  say "  probe: node http.get from a sibling container using ${app_img:-the app image}"
+
+  probe_once(){
+    local out
+    if [ -n "$app_img" ]; then
+      out="$(sudo docker run --rm --entrypoint node --network "$net" "$app_img" -e '
+const http = require("http");
+const req = http.get({host:"openarchiver-app", port:3000, path:"/", timeout:8000}, r => {
+  console.log(r.statusCode); r.destroy(); process.exit(0);
+});
+req.on("timeout", () => { console.log("TIMEOUT"); req.destroy(); process.exit(0); });
+req.on("error", e => { console.log("ERR:" + e.code); process.exit(0); });
+' 2>/dev/null | tr -d "\r\n")"
+      if [ -n "$out" ]; then how="node"; printf '%s' "$out"; return 0; fi
+    fi
+    # Fallback: raw socket via the probe image, for the case where the app image lacks node.
+    out="$(sudo docker run --rm --network "$net" "$probe_img" sh -c \
+      'command -v nc >/dev/null 2>&1 || { echo NO_NC; exit 0; }
+       printf "GET / HTTP/1.0\r\nHost: openarchiver-app\r\nConnection: close\r\n\r\n" \
+         | nc -w 8 openarchiver-app 3000 2>/dev/null | head -1' 2>/dev/null \
+      | tr -d "\r")"
+    how="nc"; printf '%s' "$out"
+  }
+
+  while [ "$i" -lt 8 ]; do
+    raw="$(probe_once)"
+    status="$(printf '%s' "$raw" | grep -oE '^[0-9]{3}$' || printf '%s' "$raw" | grep -oE 'HTTP/1\.[01] [0-9]{3}' | awk '{print $2}')"
     case "$status" in 2*|3*|401|403) break ;; esac
+    [ -n "$raw" ] && say "  (attempt $((i+1)) via $how returned: $raw)"
     i=$((i+1)); sleep 5
   done
   case "$status" in
@@ -502,8 +538,10 @@ s.on("timeout",()=>done("BLOCKED"));
        state="$(sudo docker inspect openarchiver-app --format '{{.State.Status}}' 2>/dev/null)"
        if [ "$state" = "running" ]; then
          bad "no HTTP status from openarchiver-app, but the container IS running (state: $state)"
-         bad "  That points at the PROBE, not the app. Check by hand while the cut is not applied:"
-         bad "    sudo docker run --rm --network $net $probe_img sh -c 'nc -z -w3 openarchiver-app 3000 && echo open'"
+         bad "  last probe (via ${how:-none}) returned: '${raw:-nothing}'"
+         bad "  That points at the PROBE, not the app. Check by hand — the cut is already restored:"
+         bad "    sudo docker run --rm --entrypoint node --network $net ${app_img:-IMAGE} \\"
+         bad "      -e 'require(\"http\").get({host:\"openarchiver-app\",port:3000},r=>console.log(r.statusCode))'"
        else
          bad "the app stopped answering once egress was really cut (container state: ${state:-unknown})"
          bad "  A mail archive that needs outbound access has not earned this family's correspondence."
