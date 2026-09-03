@@ -473,18 +473,42 @@ s.on("timeout",()=>done("BLOCKED"));
   say "  (the published port is intentionally unreachable from the host under internal:true —"
   say "   checking the app from a sibling container on the same network instead)"
   sleep 5   # let the app finish restarting after the recreate
+  #
+  # Read the RAW status line over a socket rather than using wget.
+  #
+  # wget follows redirects by default. This app answers / with a 307 to its ORIGIN, and under
+  # `internal: true` that address is deliberately unreachable — so wget chased the redirect off the
+  # cut network, failed, and printed nothing, which the gate reported as "the app stopped
+  # answering". The app was serving perfectly. The earlier egress probe only ever proved wget
+  # FAILS, so a successful fetch had never been exercised in this image.
+  #
+  # A one-line HTTP/1.0 request over nc answers the actual question — is something serving on
+  # :3000 — without interpreting or following anything.
   local status="" i=0
   while [ "$i" -lt 12 ]; do
     status="$(sudo docker run --rm --network "$net" "$probe_img" sh -c \
-      'wget -T 5 -S -q -O /dev/null http://openarchiver-app:3000/ 2>&1 | grep -m1 -oE "HTTP/1\.[01] [0-9]{3}"' 2>/dev/null | awk '{print $2}')"
+      'printf "GET / HTTP/1.0\r\nHost: openarchiver-app\r\nConnection: close\r\n\r\n" \
+         | nc -w 5 openarchiver-app 3000 2>/dev/null | head -1' 2>/dev/null \
+      | grep -oE 'HTTP/1\.[01] [0-9]{3}' | awk '{print $2}')"
     case "$status" in 2*|3*|401|403) break ;; esac
     i=$((i+1)); sleep 5
   done
   case "$status" in
     2*|3*|401|403) ok "the app still serves with egress genuinely cut (HTTP $status, from inside the network)" ;;
-    *) bad "the app stopped answering once egress was really cut (got '${status:-no response}')"
-       bad "  A mail archive that needs outbound access has not earned this family's correspondence."
-       bad "  Check what it was reaching for:  sudo docker compose logs --tail=50 open-archiver"
+    *)
+       # Distinguish "the app died" from "the probe could not ask". They need different fixes, and
+       # guessing between them is what cost a cycle here.
+       local state
+       state="$(sudo docker inspect openarchiver-app --format '{{.State.Status}}' 2>/dev/null)"
+       if [ "$state" = "running" ]; then
+         bad "no HTTP status from openarchiver-app, but the container IS running (state: $state)"
+         bad "  That points at the PROBE, not the app. Check by hand while the cut is not applied:"
+         bad "    sudo docker run --rm --network $net $probe_img sh -c 'nc -z -w3 openarchiver-app 3000 && echo open'"
+       else
+         bad "the app stopped answering once egress was really cut (container state: ${state:-unknown})"
+         bad "  A mail archive that needs outbound access has not earned this family's correspondence."
+         bad "  Check what it was reaching for:  sudo docker compose logs --tail=50 open-archiver"
+       fi
        fails=$((fails+1)) ;;
   esac
 
