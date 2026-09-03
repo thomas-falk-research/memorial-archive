@@ -41,9 +41,11 @@ PG="openarchiver-postgres"
 PSQL_DB="${PSQL_DB:-open_archive}"
 PSQL_USER="${PSQL_USER:-openarchiver}"
 UPSTREAM_REPO="${UPSTREAM_REPO:-https://github.com/LogicLabs-OU/OpenArchiver}"
+OA_IMAGE_REPO="${OA_IMAGE_REPO:-logiclabshq/open-archiver}"
 DO_NETWORK=1
 BRIEF=0
 BACKUP_VERIFIED=""
+RV_MODE=0; RV_RUNNING=""; RV_GIT=""; RV_REG=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -52,6 +54,9 @@ while [ "$#" -gt 0 ]; do
     # Assert that you have verified an off-box copy of .env with THIS digest. Not blind trust:
     # the digest is re-checked against the live file, so a backup taken before a re-key is caught.
     --env-backup-verified) shift; BACKUP_VERIFIED="${1:-}" ;;
+    # Hidden: exercise the release comparison with supplied values. The network path cannot be
+    # driven from a drill, and an untested comparison is how the last wrong answer got believed.
+    --release-verdict) shift; RV_RUNNING="${1:-}"; shift; RV_GIT="${1:-}"; shift; RV_REG="${1:-}"; RV_MODE=1 ;;
     -h|--help) sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) printf 'unknown option: %s\n' "$1" >&2; exit 2 ;;
   esac
@@ -88,6 +93,33 @@ bind_ok(){
       [ "$o2" -ge 64 ] && [ "$o2" -le 127 ] && return 0 ;;
   esac
   return 1
+}
+
+
+# registry_latest <repo> — the newest vN.N.N tag in the CONTAINER REGISTRY, which is what we
+# actually deploy. Independent of git, so it corroborates rather than echoes. Version-sorted
+# client-side because the registry's own ordering parameter is not dependable.
+registry_latest(){
+  have curl || return 1
+  have python3 || return 1
+  local url="https://hub.docker.com/v2/repositories/$1/tags?page_size=100"
+  local page=0 tmp; tmp="$(mktemp -d)" || return 1
+  while [ -n "$url" ] && [ "$page" -lt 5 ]; do
+    curl -s --max-time 30 "$url" -o "$tmp/p.json" 2>/dev/null || break
+    [ -s "$tmp/p.json" ] || break
+    python3 - "$tmp/p.json" "$tmp/names" "$tmp/next" <<'PYEOF' 2>/dev/null || break
+import json, sys
+d = json.load(open(sys.argv[1]))
+open(sys.argv[2], "a").write("\n".join(r.get("name", "") for r in d.get("results", [])) + "\n")
+open(sys.argv[3], "w").write(d.get("next") or "")
+PYEOF
+    url="$(cat "$tmp/next" 2>/dev/null)"
+    page=$((page+1))
+  done
+  local out=""
+  [ -s "$tmp/names" ] && out="$(grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' "$tmp/names" | sort -V | tail -1)"
+  rm -rf "$tmp"
+  [ -n "$out" ] && printf '%s' "$out"
 }
 
 dk(){ sudo docker "$@" 2>/dev/null; }
@@ -173,21 +205,52 @@ if [ -n "$REPO_DIR" ] && [ -f "$REPO_DIR/archive-openarchiver-setup.sh" ]; then
   fi
 fi
 
-if [ "$DO_NETWORK" -eq 1 ]; then
-  latest="$(timeout 45 git ls-remote --tags --refs "$UPSTREAM_REPO" 'v*' 2>/dev/null \
-            | sed 's|.*refs/tags/||' | sort -V | tail -1)"
-  if [ -z "$latest" ]; then
-    unk "could not reach upstream to confirm the current release (offline is fine — re-run with --no-network to skip)"
-  elif [ -z "$running_tag" ]; then
-    unk "upstream latest is $latest, but the running tag is unknown"
-  elif [ "$latest" = "$running_tag" ]; then
-    ok "upstream latest is $latest — we are ON the current release, no upgrade needed"
+if [ "$DO_NETWORK" -eq 1 ] || [ "$RV_MODE" -eq 1 ]; then
+  if [ "$RV_MODE" -eq 1 ]; then
+    git_latest="$RV_GIT"; reg_latest="$RV_REG"; running_tag="$RV_RUNNING"
   else
-    # Not a blocker. Upgrading mid-project is a bigger risk than being one release behind, and the
-    # pin exists precisely so the version never moves without a decision.
-    unk "upstream has $latest; we run $running_tag — a DECISION, not a defect (pin is deliberate)"
-    note "upgrading costs a re-verify of every gate; being current costs nothing today"
+    git_latest="$(timeout 45 git ls-remote --tags --refs "$UPSTREAM_REPO" 'v*' 2>/dev/null \
+                  | sed 's|.*refs/tags/||' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)"
+    reg_latest="$(registry_latest "$OA_IMAGE_REPO")"
   fi
+
+  if [ -z "$git_latest" ] && [ -z "$reg_latest" ]; then
+    unk "could not reach either source to establish the current release (offline? use --no-network)"
+  elif [ -n "$git_latest" ] && [ -n "$reg_latest" ] && [ "$git_latest" != "$reg_latest" ]; then
+    # THE STALE-ANSWER DETECTOR, and the reason this check asks twice.
+    #
+    # A single `git ls-remote` in this project once returned v0.5.2 as the newest tag while v0.6.0
+    # had been released eleven days earlier — a cached answer, reported as fact, believed, and
+    # written into an assessment. Two independent sources cannot both be stale in the same
+    # direction without it showing up here.
+    unk "the two sources DISAGREE on the current release — one of them is stale"
+    note "  git tags say : ${git_latest}"
+    note "  the registry says: ${reg_latest}"
+    note "Believe neither until they agree. A cached ls-remote reported an old release as current"
+    note "in this project once already, and nothing caught it because nothing else was asked."
+    note "  newer of the two: $(printf '%s\n%s\n' "$git_latest" "$reg_latest" | sort -V | tail -1)"
+  else
+    latest="${reg_latest:-$git_latest}"
+    corroborated="both git and the registry"
+    if [ -z "$git_latest" ] || [ -z "$reg_latest" ]; then
+      corroborated="only one source (the other was unreachable)"
+    fi
+    if [ -z "$running_tag" ]; then
+      unk "current release is $latest per $corroborated, but the running tag is unknown"
+    elif [ "$latest" = "$running_tag" ]; then
+      if [ "$corroborated" = "both git and the registry" ]; then
+        ok "on the current release ($latest), confirmed by git tags AND the registry"
+      else
+        unk "appears current ($latest) but confirmed by $corroborated — weaker evidence"
+      fi
+    else
+      # Not a blocker. The pin exists so the version never moves without a decision.
+      unk "upstream has $latest; we run $running_tag — a DECISION to make, not a defect"
+      note "  confirmed by $corroborated"
+      note "  upgrading costs a re-verify of every gate; read the changelog before deciding"
+    fi
+  fi
+  [ "$RV_MODE" -eq 1 ] && { printf '\n'; exit 0; }
 else
   unk "upstream release check skipped (--no-network)"
 fi

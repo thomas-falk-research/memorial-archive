@@ -355,6 +355,42 @@ fi
 reset_healthy
 
 # ------------------------------------------------------------------------------------------------
+hdr "The release check asks TWO sources, and says so when they disagree"
+
+# This exists because a single `git ls-remote` returned v0.5.2 as newest while v0.6.0 had been out
+# for eleven days — a cached answer, reported as fact and believed. One source cannot detect its own
+# staleness, so the comparison logic is driven directly here, with no network involved.
+rv(){ PATH="$STUBS:$PATH" STUB_STATE="$STATE" OPENARCHIVER_DIR="$APP" REPO_DIR="$FAKEREPO" \
+        ARCHIVE_ROOT="$WORK/archive" CADDYFILE="$STATE/caddyfile" \
+        bash "$TOOL" --release-verdict "$1" "$2" "$3" 2>&1; }
+
+rv_case(){
+  local name="$1" must="$2" running="$3" g="$4" r="$5"
+  cases=$((cases+1))
+  local out; out="$(rv "$running" "$g" "$r")"
+  if printf '%s' "$out" | grep -qF "$must"; then
+    ok "$name"
+  else
+    bad "$name — output never said: $must"
+    printf '%s\n' "$out" | grep -E 'OK|UNKNOWN|BLOCK' | sed 's/^/      /'
+    rc=1
+  fi
+}
+
+rv_case "both sources agree and match what runs" \
+        "confirmed by git tags AND the registry" v0.6.0 v0.6.0 v0.6.0
+rv_case "both agree, a newer release exists" \
+        "upstream has v0.6.0; we run v0.5.2"    v0.5.2 v0.6.0 v0.6.0
+rv_case "sources DISAGREE — stale answer detected" \
+        "DISAGREE on the current release"        v0.5.2 v0.5.2 v0.6.0
+rv_case "disagreement names the newer of the two" \
+        "newer of the two: v0.6.0"               v0.5.2 v0.5.2 v0.6.0
+rv_case "only one source reachable is weaker evidence" \
+        "weaker evidence"                        v0.6.0 ""      v0.6.0
+rv_case "neither source reachable is unknown, not fine" \
+        "could not reach either source"          v0.6.0 ""      ""
+
+# ------------------------------------------------------------------------------------------------
 hdr "Summary"
 if (( rc )); then
   bad "preflight drill FAILED ($cases cases run)"

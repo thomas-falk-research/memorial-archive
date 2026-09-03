@@ -49,6 +49,17 @@ OA_TIKA_IMAGE="${OA_TIKA_IMAGE:-apache/tika:3.2.2.0-full}"   # -full bundles OCR
 # 5 minutes. Deliberately generous: a timeout that is too long costs one stalled worker, a timeout
 # that is too short costs the document. See the note beside PDF_PARSE_TIMEOUT_MS in the .env below.
 OA_PDF_TIMEOUT_MS="${OA_PDF_TIMEOUT_MS:-300000}"
+# v0.6.0 indexing dials. Conservative on purpose for THIS box: ~10.6 GiB free with Immich running,
+# and an OOM ten hours into a 61 GiB import costs far more than a slower run. Upstream defaults are
+# 4 workers / 2048 MB heap; raise these AFTER measuring, not before.
+OA_INDEX_WORKERS="${OA_INDEX_WORKERS:-2}"
+OA_INDEX_HEAP_MB="${OA_INDEX_HEAP_MB:-1536}"
+OA_INDEX_CHUNK="${OA_INDEX_CHUNK:-25}"
+OA_EMAIL_CONCURRENCY="${OA_EMAIL_CONCURRENCY:-3}"
+# Upper bound on extracted text kept per attachment. 1 MB is several hundred OCR'd pages, so it is
+# not a practical limit for anything in this archive — but it IS a truncation knob, so it is written
+# explicitly rather than left to a default that could change under us.
+OA_MAX_TEXT_BYTES="${OA_MAX_TEXT_BYTES:-1000000}"
 FALLBACK_VERSION="v0.5.2"                          # recorded pin; audited by ci/version-audit.sh
 DOCKER_NET="${ARCHIVE_DOCKER_NET:-memorial}"
 BASE_DOMAIN="${BASE_DOMAIN:-home}"
@@ -323,6 +334,17 @@ REDIS_TLS_ENABLED=false
 STORAGE_TYPE=local
 STORAGE_LOCAL_ROOT_PATH=/var/lib/open-archiver
 BODY_SIZE_LIMIT=100M
+
+# --- v0.6.0 indexing and extraction. Harmless on v0.5.2, which ignores what it does not know;
+# the backend health gate below is what catches a bad .env either way.
+INGESTION_EMAIL_CONCURRENCY=${OA_EMAIL_CONCURRENCY}
+MEILI_INDEXING_CHUNK=${OA_INDEX_CHUNK}
+INDEXING_WORKER_CONCURRENCY=${OA_INDEX_WORKERS}
+INDEXING_WORKER_MAX_OLD_SPACE_MB=${OA_INDEX_HEAP_MB}
+INDEXING_MAX_TEXT_BYTES=${OA_MAX_TEXT_BYTES}
+# A draft is not a record. File imports (PST/EML/mbox) ignore this and archive everything the file
+# holds, so it changes nothing for us — set explicitly so it cannot drift.
+ARCHIVE_DRAFTS=false
 
 TIKA_URL=http://openarchiver-tika:9998
 # OCR is the expensive operation: 1-3 SECONDS PER PAGE, measured on this box. Upstream's 20 s

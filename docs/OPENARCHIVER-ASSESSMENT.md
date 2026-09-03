@@ -600,10 +600,13 @@ never been presented with the case it existed to catch.
 `openarchiver/preflight.sh` run on archive-pc: **28 OK · 2 UNKNOWN · 1 BLOCKING.**
 
 Most of what this document treats as open is, on the actual box, already settled: the running image
-matches compose, the repo's pin and the current upstream release (v0.5.2); five containers up with
-the backend listening on :4000; hardening intact; a real routable LAN address **and** Tailscale up —
-which retires the `169.254.x` APIPA worry that has been carried as an open question since the last
-session.
+matches compose and the repo's pin; five containers up with the backend listening on :4000;
+hardening intact; a real routable LAN address **and** Tailscale up — which retires the `169.254.x`
+APIPA worry carried as an open question since the last session.
+
+> **Correction (§7h).** This section originally also said v0.5.2 was "the current upstream release".
+> That was wrong. v0.6.0 had been out for eleven days. The claim came from a single `git ls-remote`
+> that returned a stale tag list, and it was reported as fact, repeated, and written down here.
 
 ### The blocker
 
@@ -678,6 +681,60 @@ authenticate."** `backup-env.sh` was *designed* around the zero-byte file that f
 with `sudo install -m 600 -o USER`, pulls it with plain `scp`, and explicitly warns against `ssh -t`,
 which would appear to fix it while a tty rewrote every LF to CRLF (caught by the digest, but a wasted
 round trip). A tool that anticipates a failure mode should not hand you the command that triggers it.
+
+---
+
+## 7h. v0.6.0 — and how a stale lookup was believed
+
+**v0.6.0 was released 2026-08-24** and is present in the registry as `logiclabshq/open-archiver:v0.6.0`
+(pushed the same day). We run v0.5.2. This document said twice that we were on the current release.
+
+**How the wrong answer got in.** `git ls-remote --tags` was run, returned v0.5.2 as newest, and that
+was reported as settled — "no upgrade, no drift". Re-running the identical command later returns
+v0.6.0. The first answer was cached somewhere between here and GitHub. Nothing caught it because
+nothing else was asked: a single source cannot detect its own staleness, and the pin's whole purpose
+is to make the version a decision, which needs the current version to be known.
+
+`preflight.sh` now asks **two independent sources** — git tags and the container registry, which is
+what actually gets deployed — and when they disagree it reports **UNKNOWN naming both answers**
+rather than picking one. Six cases in the drill exercise the comparison directly through a hidden
+`--release-verdict` seam, because the network path cannot be driven from a stubbed test and an
+untested comparison is precisely how the last wrong answer survived.
+
+### What is actually in v0.6.0
+
+14 commits. The two DB migrations are **additive** — `ALTER TYPE ... ADD VALUE 'oauth_mailbox'` and
+four `ADD COLUMN IF NOT EXISTS` on `journaling_sources`. Nothing destructive, nothing like the
+Paperless v2→v3 hazard.
+
+| Change | Bearing on this archive |
+|---|---|
+| **`textExtractor.ts` rewritten** (70 → 238 lines) | pdf2json parses are now **serialised per process** with on-demand GC, because parallel parses "defeat any per-parse memory guard: each one looks safely under the ceiling until their sum aborts the process". This is the exact code path a 61 GiB attachment-heavy import runs hardest. |
+| **Indexing rework** | `MEILI_INDEXING_CHUNK`, `INDEXING_WORKER_CONCURRENCY`, `INDEXING_WORKER_MAX_OLD_SPACE_MB`, a reconcile/backlog pass and an index-admin API. Throughput and memory behaviour for our one big job. |
+| **`INDEXING_MAX_TEXT_BYTES=1000000`** | **New truncation knob.** Caps extracted text per attachment "against a single scanned PDF turning into tens of megabytes". 1 MB is several hundred OCR'd pages, so not a practical limit here — but it is now written explicitly rather than inherited. |
+| **`ARCHIVE_DRAFTS=false`** | Irrelevant to us by design: "File imports (PST, EML, mbox) ignore this and always archive everything the file contains." |
+| **Valkey default password** | The compose now defaults `REDIS_PASSWORD` to `defaultredispassword` so Valkey starts without one. A default that makes the stack *boot* is the kind that survives unnoticed — added to the harden gate's upstream-default-secret check. |
+| Ingestion credential-wipe fix, M365 guest fix, TOTP 2FA | No live connectors here; the credential fix is general robustness. |
+
+### Recommendation: upgrade at the clean slate, not before and not after
+
+The plan already wipes the store (step 6) before the real import. That makes this nearly free:
+
+- **No data migration.** A fresh database means the additive migrations run on an empty schema.
+- **The gates get re-run anyway** on the final configuration (step 8), which is exactly what a
+  version change requires.
+- **Rollback is cheap while the store is empty** — redeploy v0.5.2, since `.env` and its
+  unregenerable keys are untouched by either.
+- **The improvements are in our bottleneck.** Serialised PDF parsing and a bounded indexing heap
+  address the failure most likely to end a ten-hour import.
+
+The cost is real and should be stated: v0.6.0 is ~10 days old, 0.x, and its extraction path was
+rewritten — so **the OCR gate must be re-run on v0.6.0**, and the five tokens re-checked there.
+A pass on v0.5.2 says nothing about a version whose `textExtractor` is a different file.
+
+**Consequence for sequencing:** running the OCR gate and the merge-dedup experiment on v0.5.2 now
+would answer questions about a version we are about to discard. Both should run on v0.6.0, after
+the wipe.
 
 ---
 

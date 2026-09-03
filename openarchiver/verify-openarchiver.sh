@@ -141,7 +141,10 @@ gate_harden(){
   fi
 
   # Secrets must not be upstream's examples.
-  if sudo grep -qE '^(POSTGRES_PASSWORD=password|MEILI_MASTER_KEY=aSampleMasterKey)$' "$APP_DIR/.env" 2>/dev/null; then
+  # v0.6.0 added a THIRD upstream default: the compose now defaults REDIS_PASSWORD to
+  # 'defaultredispassword' so Valkey starts without one. A default that makes the stack boot is
+  # exactly the kind that survives into production unnoticed.
+  if sudo grep -qE '^(POSTGRES_PASSWORD=password|MEILI_MASTER_KEY=aSampleMasterKey|REDIS_PASSWORD=defaultredispassword)$' "$APP_DIR/.env" 2>/dev/null; then
     bad "an upstream DEFAULT secret is still in place"; fails=$((fails+1))
   else
     ok "secrets are generated, not upstream defaults"
