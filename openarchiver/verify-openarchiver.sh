@@ -53,6 +53,24 @@ warn(){ printf '  %sWARN%s %s\n' "$c_y" "$c_0" "$*" >&2; }
 die(){ printf '%sFATAL%s %s\n' "$c_r" "$c_0" "$*" >&2; exit 2; }
 
 dc(){ ( cd "$APP_DIR" && sudo docker compose "$@" ); }
+
+# bind_ok <ip> — the only two interfaces this stack may publish on.
+#
+# Loopback, or this host's Tailscale address. Tailscale hands out CGNAT space, 100.64.0.0/10, i.e.
+# 100.64.x.x through 100.127.x.x — matching a bare "100." prefix would also accept 100.200.x.x,
+# which is ordinary PUBLIC address space, so the check would quietly permit a public bind while
+# looking like it had been tightened.
+bind_ok(){
+  [ "$1" = "127.0.0.1" ] && return 0
+  case "$1" in
+    100.*)
+      local o2="${1#100.}"; o2="${o2%%.*}"
+      case "$o2" in ''|*[!0-9]*) return 1 ;; esac
+      [ "$o2" -ge 64 ] && [ "$o2" -le 127 ] && return 0 ;;
+  esac
+  return 1
+}
+
 fails=0
 
 [ -d "$APP_DIR" ] || die "No install at $APP_DIR — run archive-openarchiver-setup.sh first."
@@ -79,13 +97,21 @@ gate_harden(){
     bad "MEILI_NO_ANALYTICS is NOT set — Meilisearch reports home by default"; fails=$((fails+1))
   fi
 
-  local bad_ports
-  bad_ports="$(grep -E 'published:' <<<"$cfg" | head -20)"
-  if grep -E 'host_ip:' <<<"$cfg" | grep -qv '127\.0\.0\.1'; then
-    bad "a port is published on a non-loopback interface:"; grep -E 'host_ip:' <<<"$cfg" | sed 's/^/      /' >&2
+  local hostips npub bad_ip="" ip
+  hostips="$(sed -n 's/.*host_ip: *//p' <<<"$cfg" | tr -d '"' | tr -d ' ')"
+  npub="$(grep -cE 'published:' <<<"$cfg")"
+  if [ "${npub:-0}" -gt 0 ] && [ -z "$hostips" ]; then
+    bad "$npub port(s) published with no host_ip — that means EVERY interface"
     fails=$((fails+1))
   else
-    ok "every published port is bound to 127.0.0.1${bad_ports:+ (}${bad_ports:+$(grep -cE 'published:' <<<"$cfg") published)}"
+    for ip in $hostips; do bind_ok "$ip" || bad_ip="$bad_ip $ip"; done
+    if [ -n "$bad_ip" ]; then
+      bad "a port is published on a disallowed interface:$bad_ip"
+      bad "  allowed: 127.0.0.1, or this host's Tailscale address in 100.64.0.0/10"
+      fails=$((fails+1))
+    else
+      ok "every published port is on loopback or the tailnet ($(tr '\n' ' ' <<<"$hostips"))"
+    fi
   fi
 
   if grep -qE "source: $ARCHIVE_ROOT(/|$)" <<<"$cfg"; then

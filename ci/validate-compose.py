@@ -59,6 +59,7 @@ VARS = {
     "REDIS_IMAGE": "redis:7-alpine",
     "OPENARCHIVER_IMAGE": "logiclabshq/open-archiver",
     "OPENARCHIVER_PORT": "3010",
+    "OPENARCHIVER_BIND": "127.0.0.1",
     "OA_PG_IMAGE": "postgres:17-alpine",
     "OA_VALKEY_IMAGE": "valkey/valkey:8-alpine",
     "OA_MEILI_IMAGE": "getmeili/meilisearch:v1.38",
@@ -66,8 +67,9 @@ VARS = {
 }
 
 # (setup script, compose filename, expectations). archive: "ro" = must mount the archive read-only;
-# None = must not mount it at all. loopback: every published port must bind 127.0.0.1. must_mount:
-# bind-mount sources that have to be present.
+# None = must not mount it at all. loopback: every published port must bind 127.0.0.1 — or, where
+# `tailnet=True`, this host's Tailscale address in 100.64.0.0/10. must_mount: bind-mount sources
+# that have to be present.
 APPS = [
     ("archive-copyparty-setup.sh", "docker-compose.yml",
      dict(archive="ro", loopback=True)),
@@ -85,11 +87,61 @@ APPS = [
      dict(archive=None, loopback=None, must_mount=["/srv/pc-backups"])),
     # Open Archiver must NEVER mount the archive: mail is imported from COPIES placed in its own
     # import/ directory. That is the whole safety design, so the validator enforces it.
+    # Open Archiver may also publish on the tailnet (`--tailscale`): reachable from the operator's
+    # own devices over WireGuard, invisible to the LAN. 0.0.0.0 and LAN addresses stay refused.
     ("archive-openarchiver-setup.sh", "docker-compose.yml",
-     dict(archive=None, loopback=True)),
+     dict(archive=None, loopback=True, tailnet=True)),
 ]
 
 ARCHIVE = VARS["ARCHIVE_ROOT"]
+
+# The bind rule is a SAFETY rule that was widened to admit the tailnet, so it runs its own table on
+# every invocation. A widened rule that quietly accepts more than intended is worse than the narrow
+# one it replaced — 100.200.x.x is ordinary public address space and sits one careless prefix-match
+# away from 100.64.x.x.
+BIND_CASES = [
+    ("127.0.0.1:3010:3000",     False, True),
+    ("127.0.0.1:3010:3000",     True,  True),
+    ("100.64.0.1:3010:3000",    True,  True),
+    ("100.127.255.9:3010:3000", True,  True),
+    ("100.64.0.1:3010:3000",    False, False),   # tailnet address, app not opted in
+    ("100.63.0.1:3010:3000",    True,  False),   # just below the range
+    ("100.128.0.1:3010:3000",   True,  False),   # just above the range
+    ("100.200.1.1:3010:3000",   True,  False),   # public space that starts with 100.
+    ("0.0.0.0:3010:3000",       True,  False),
+    ("192.168.1.42:3010:3000",  True,  False),
+    ("3010:3000",               True,  False),   # bare port = every interface
+]
+
+
+def self_test_bind_rule() -> list:
+    out = []
+    for spec, tailnet_ok, want in BIND_CASES:
+        got = bind_allowed(spec, tailnet_ok)
+        if got != want:
+            out.append(f"bind rule self-test: bind_allowed({spec!r}, tailnet={tailnet_ok}) "
+                       f"returned {got}, expected {want}")
+    return out
+
+
+
+def bind_allowed(port_spec: str, tailnet_ok: bool) -> bool:
+    """Is this `ports:` entry published on an interface this app is allowed to use?
+
+    Loopback always. A Tailscale CGNAT address (100.64.0.0/10) only where the app opts in — and
+    matching that range properly matters: a bare "100." prefix would also accept 100.200.x.x, which
+    is ordinary public address space, so the widened rule would quietly permit a public bind.
+    """
+    if port_spec.startswith("127.0.0.1:"):
+        return True
+    if not tailnet_ok:
+        return False
+    m = re.match(r"^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}:", port_spec)
+    if not m:
+        return False
+    return m.group(1) == "100" and 64 <= int(m.group(2)) <= 127
+
+
 
 
 def extract_heredoc(script: str, fname: str) -> str:
@@ -161,9 +213,12 @@ def check_app(script: str, fname: str, exp: dict, fails: list[str]) -> None:
                 archive_mounts.append((name, vol))
         if exp.get("loopback"):
             for p in ports_of(svc):
-                if not p.startswith("127.0.0.1:"):
-                    fails.append(f"{where}: service '{name}' publishes {p!r} on all interfaces "
-                                 f"(expected loopback 127.0.0.1:)")
+                if not bind_allowed(p, exp.get("tailnet", False)):
+                    allowed = "loopback 127.0.0.1:"
+                    if exp.get("tailnet"):
+                        allowed += " or a Tailscale address in 100.64.0.0/10"
+                    fails.append(f"{where}: service '{name}' publishes {p!r} on a disallowed "
+                                 f"interface (expected {allowed})")
 
     # The safety centerpiece: the archive is never writable through a container.
     if exp.get("archive") == "ro":
@@ -196,6 +251,16 @@ def check_app(script: str, fname: str, exp: dict, fails: list[str]) -> None:
 
 def main() -> int:
     fails: list[str] = []
+
+    print("\n== bind rule self-test (loopback always; tailnet only where opted in)")
+    bind_fails = self_test_bind_rule()
+    if bind_fails:
+        fails.extend(bind_fails)
+        print(f"  ✗ {len(bind_fails)} of {len(BIND_CASES)} cases wrong")
+    else:
+        print(f"  ✓ all {len(BIND_CASES)} cases correct "
+              f"(0.0.0.0, LAN, and 100.200.x.x all still refused)")
+
     print("\n== compose render + YAML validation")
     for script, fname, exp in APPS:
         n = len(fails)

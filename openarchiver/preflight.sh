@@ -72,6 +72,24 @@ unk(){  n_unk=$((n_unk+1)); UNKNOWNS+=("$1"); [ "$BRIEF" -eq 1 ] || printf '  %s
 note(){ [ "$BRIEF" -eq 1 ] || printf '          %s\n' "$*"; }
 
 have(){ command -v "$1" >/dev/null 2>&1; }
+
+# bind_ok <ip> — the only two interfaces this stack may publish on.
+#
+# Loopback, or this host's Tailscale address. Tailscale hands out CGNAT space, 100.64.0.0/10, i.e.
+# 100.64.x.x through 100.127.x.x — matching a bare "100." prefix would also accept 100.200.x.x,
+# which is ordinary PUBLIC address space, so the check would quietly permit a public bind while
+# looking like it had been tightened.
+bind_ok(){
+  [ "$1" = "127.0.0.1" ] && return 0
+  case "$1" in
+    100.*)
+      local o2="${1#100.}"; o2="${o2%%.*}"
+      case "$o2" in ''|*[!0-9]*) return 1 ;; esac
+      [ "$o2" -ge 64 ] && [ "$o2" -le 127 ] && return 0 ;;
+  esac
+  return 1
+}
+
 dk(){ sudo docker "$@" 2>/dev/null; }
 q(){ sudo docker exec "$PG" psql -U "$PSQL_USER" -d "$PSQL_DB" -tAc "$1" 2>/dev/null | tr -d '\r'; }
 q1(){ q "$1" | head -1 | tr -d '[:space:]'; }
@@ -231,10 +249,16 @@ else
     else
       bad "MEILI_NO_ANALYTICS not set — Meilisearch reports home by default"
     fi
-    if grep -E 'host_ip:' <<<"$cfg" | grep -qv '127\.0\.0\.1'; then
-      bad "a port is published on a non-loopback interface"
+    hostips="$(sed -n 's/.*host_ip: *//p' <<<"$cfg" | tr -d '"' | tr -d ' ')"
+    npub="$(grep -cE 'published:' <<<"$cfg")"
+    bad_ip=""
+    for ip in $hostips; do bind_ok "$ip" || bad_ip="$bad_ip $ip"; done
+    if [ "${npub:-0}" -gt 0 ] && [ -z "$hostips" ]; then
+      bad "$npub port(s) published with no host_ip — that means EVERY interface"
+    elif [ -n "$bad_ip" ]; then
+      bad "a port is published on a disallowed interface:$bad_ip (want loopback or 100.64.0.0/10)"
     else
-      ok "every published port is bound to 127.0.0.1"
+      ok "published ports are on loopback or the tailnet ($(tr '\n' ' ' <<<"$hostips"))"
     fi
     if grep -qE "source: $ARCHIVE_ROOT(/|$)" <<<"$cfg"; then
       bad "THE ARCHIVE IS MOUNTED INTO A CONTAINER — it must never be"
@@ -441,8 +465,26 @@ else
 fi
 
 origin="$(envget ORIGIN 2>/dev/null)"
+# What should actually be typed into a browser. Derived from the bind, not from hope: the published
+# interface and ORIGIN have to agree, and printing the single resulting URL makes a disagreement
+# obvious instead of leaving it to be discovered by a form post that silently fails.
+bindaddr="$(sudo sed -n 's/.*"\([0-9.]*\):[0-9]*:3000".*/\1/p' "$APP_DIR/docker-compose.yml" 2>/dev/null | head -1)"
+if [ -n "$bindaddr" ]; then
+  if [ "$bindaddr" = "127.0.0.1" ]; then
+    note "published on loopback — reach it via Caddy, or an SSH tunnel:"
+    note "  ssh -N -L 8931:127.0.0.1:$PORT $(id -un)@$(hostname -s 2>/dev/null || hostname)"
+  else
+    note "published on $bindaddr — browse directly to:  http://$bindaddr:$PORT"
+  fi
+fi
 if [ -n "$origin" ]; then
   ok "ORIGIN=$origin"
+  if [ -n "$bindaddr" ] && [ "$bindaddr" != "127.0.0.1" ] && [ "$origin" != "http://$bindaddr:$PORT" ]; then
+    bad "ORIGIN does not match the published address — form posts will be REJECTED"
+    note "  published: http://$bindaddr:$PORT"
+    note "  ORIGIN   : $origin"
+    note "  fix with: bash archive-openarchiver-setup.sh --tailscale"
+  fi
   case "$origin" in
     *127.0.0.1*)
       note "This matches the SSH-tunnel access pattern ONLY."

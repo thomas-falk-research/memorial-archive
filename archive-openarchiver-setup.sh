@@ -11,6 +11,8 @@
 #   1. MEILI_NO_ANALYTICS=true — Meilisearch collects analytics from every instance that does not opt
 #      out, and upstream's compose does not set it. Nothing on this box phones home.
 #   2. Loopback-only publishing (127.0.0.1) — upstream publishes on every interface. Caddy fronts it.
+#      The one sanctioned alternative is this host's Tailscale address (--tailscale), which reaches
+#      your own devices over WireGuard and stays invisible to the LAN. 0.0.0.0 is refused outright.
 #   3. Container names namespaced 'openarchiver-*' — upstream claims the GLOBAL names 'postgres',
 #      'valkey', 'meilisearch' and 'tika' on the Docker daemon, which would collide with other stacks.
 #   4. Generated secrets — upstream defaults include POSTGRES_PASSWORD 'password' and MEILI_MASTER_KEY
@@ -31,7 +33,14 @@ trap 'printf "\n\033[1;31mERROR\033[0m: command failed at line %s\n" "$LINENO" >
 # ---- Configuration (override via environment) ------------------------------------------------
 APP_DIR="${OPENARCHIVER_DIR:-/srv/apps/openarchiver}"
 OPENARCHIVER_VERSION="${OPENARCHIVER_VERSION:-}"   # empty = keep what's installed (pinned default on a fresh box)
-OPENARCHIVER_PORT="${OPENARCHIVER_PORT:-3010}"     # 127.0.0.1 only. 3000 is taken by Docmost.
+OPENARCHIVER_PORT="${OPENARCHIVER_PORT:-3010}"     # 3000 is taken by Docmost.
+# Which interface the port is published on. Loopback by default: the app is then reachable only
+# through Caddy or an SSH tunnel. The ONLY other accepted value is this host's Tailscale address
+# (100.64.0.0/10), which exposes it to the tailnet and nothing else — WireGuard-encrypted, subject
+# to your Tailscale ACLs, and invisible from the LAN. 0.0.0.0 and LAN addresses are refused: an
+# archive of a deceased attorney's correspondence should not be one firewall rule away from the
+# whole subnet. Use --tailscale to set this and ORIGIN together.
+OPENARCHIVER_BIND="${OPENARCHIVER_BIND:-}"
 OPENARCHIVER_IMAGE="${OPENARCHIVER_IMAGE:-logiclabshq/open-archiver}"
 OA_PG_IMAGE="${OA_PG_IMAGE:-postgres:17-alpine}"   # pinned MAJOR — never change it on an existing DB
 OA_VALKEY_IMAGE="${OA_VALKEY_IMAGE:-valkey/valkey:8-alpine}"
@@ -46,20 +55,29 @@ BASE_DOMAIN="${BASE_DOMAIN:-home}"
 
 ASSUME_YES=false
 ALLOW_UPGRADE=false
+WANT_TAILSCALE=false
+WANT_LOOPBACK=false
 usage() {
   cat <<USAGE
 Usage: ${0##*/} [--yes|-y] [--upgrade] [--help|-h]
   --yes, -y   skip the confirmation prompt
   --upgrade   advance an existing install to the latest upstream release
               (without it, a re-run keeps the tag already deployed)
+  --tailscale publish on this host's Tailscale address instead of loopback, and set
+              ORIGIN/APP_URL to match. Both must move together or logins break.
+  --loopback  publish on 127.0.0.1 only (the default), and set ORIGIN to the SSH-tunnel URL
   --help, -h  show this help and exit
-Env overrides: OPENARCHIVER_VERSION (exact tag), OPENARCHIVER_DIR, OPENARCHIVER_PORT, BASE_DOMAIN.
+Env overrides: OPENARCHIVER_VERSION (exact tag), OPENARCHIVER_DIR, OPENARCHIVER_PORT,
+               OPENARCHIVER_BIND (127.0.0.1 or a 100.64.0.0/10 Tailscale address),
+               OPENARCHIVER_URL, BASE_DOMAIN.
 USAGE
 }
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -y|--yes)  ASSUME_YES=true ;;
     --upgrade) ALLOW_UPGRADE=true ;;
+    --tailscale) WANT_TAILSCALE=true ;;
+    --loopback)  WANT_LOOPBACK=true ;;
     -h|--help) usage; exit 0 ;;
     *) printf 'Unknown option: %s (try --help)\n' "$1" >&2; exit 2 ;;
   esac
@@ -126,6 +144,60 @@ fi
 OPENARCHIVER_VERSION="v${OPENARCHIVER_VERSION#v}"
 IMAGE_TAG="$OPENARCHIVER_VERSION"
 
+# ---- Publish-interface resolution ---------------------------------------------------------------
+# is_loopback / is_tailnet — the ONLY two accepted binds. Everything else is refused, by name, with
+# the reason: this stack holds privileged legal correspondence, and "reachable from the LAN" is a
+# materially different exposure from "reachable from my own devices over WireGuard".
+is_loopback(){ [[ "$1" == "127.0.0.1" ]]; }
+is_tailnet(){
+  # Tailscale hands out CGNAT space, 100.64.0.0/10 — i.e. 100.64.x.x through 100.127.x.x. Matching
+  # a bare "100." would also accept 100.200.x.x, which is ordinary public address space.
+  [[ "$1" =~ ^100\.([0-9]{1,3})\.[0-9]{1,3}\.[0-9]{1,3}$ ]] || return 1
+  local o2="${BASH_REMATCH[1]}"
+  (( o2 >= 64 && o2 <= 127 ))
+}
+
+tailscale_ip(){
+  command -v tailscale >/dev/null 2>&1 || return 1
+  tailscale ip -4 2>/dev/null | head -1 | tr -d '[:space:]'
+}
+
+installed_bind=""
+if sudo test -f "$APP_DIR/docker-compose.yml"; then
+  installed_bind="$(sudo grep -oE '"[0-9.]+:[0-9]+:3000"' "$APP_DIR/docker-compose.yml" 2>/dev/null \
+    | head -1 | tr -d '"' | cut -d: -f1)"
+fi
+
+bind_source=""
+if [[ "$WANT_TAILSCALE" == true && "$WANT_LOOPBACK" == true ]]; then
+  die "--tailscale and --loopback are mutually exclusive."
+elif [[ "$WANT_TAILSCALE" == true ]]; then
+  OPENARCHIVER_BIND="$(tailscale_ip)" || true
+  [[ -n "$OPENARCHIVER_BIND" ]] || die "--tailscale: could not read this host's Tailscale address.
+    Is tailscaled running and logged in?   tailscale status ; tailscale ip -4"
+  bind_source="--tailscale"
+elif [[ "$WANT_LOOPBACK" == true ]]; then
+  OPENARCHIVER_BIND="127.0.0.1"; bind_source="--loopback"
+elif [[ -n "$OPENARCHIVER_BIND" ]]; then
+  bind_source="requested explicitly"
+elif [[ -n "$installed_bind" ]]; then
+  OPENARCHIVER_BIND="$installed_bind"; bind_source="reused from the existing install"
+else
+  OPENARCHIVER_BIND="127.0.0.1"; bind_source="default"
+fi
+
+if is_loopback "$OPENARCHIVER_BIND"; then
+  bind_kind="loopback"
+elif is_tailnet "$OPENARCHIVER_BIND"; then
+  bind_kind="tailnet"
+else
+  die "refusing to publish on '${OPENARCHIVER_BIND}'.
+    Accepted: 127.0.0.1 (loopback), or this host's Tailscale address in 100.64.0.0/10.
+    0.0.0.0 would expose an archive of privileged legal correspondence to every interface,
+    and a LAN address to the whole subnet. Neither is a decision this script will make for you.
+    For tailnet access:   bash ${0##*/} --tailscale"
+fi
+
 # ---- Access URL resolution (explicit request, else what is already deployed, else default) ------
 installed_url=""
 if sudo test -f "$APP_DIR/.env"; then
@@ -133,10 +205,32 @@ if sudo test -f "$APP_DIR/.env"; then
 fi
 if [[ -n "$OPENARCHIVER_URL_REQUESTED" ]]; then
   OPENARCHIVER_URL="$OPENARCHIVER_URL_REQUESTED"; url_source="requested explicitly"
+elif [[ "$bind_source" == "--tailscale" ]]; then
+  # The bind and the origin are one decision, not two. Moving the port to the tailnet without moving
+  # ORIGIN produces an app that loads and then rejects every form post — the exact failure that looks
+  # like a broken login and isn't. --tailscale therefore sets both.
+  OPENARCHIVER_URL="http://${OPENARCHIVER_BIND}:${OPENARCHIVER_PORT}"; url_source="derived from --tailscale"
 elif [[ -n "$installed_url" ]]; then
   OPENARCHIVER_URL="$installed_url";             url_source="reused from the existing install"
 else
   OPENARCHIVER_URL="http://mail.${BASE_DOMAIN}"; url_source="default for a fresh install"
+fi
+
+# The bind and ORIGIN must agree, or the app loads and rejects every form post. This is the check
+# that makes the pair impossible to ship half-changed — including via a plain re-run that reuses one
+# and not the other.
+if [[ "$bind_kind" == "tailnet" ]]; then
+  want_origin="http://${OPENARCHIVER_BIND}:${OPENARCHIVER_PORT}"
+  if [[ "$OPENARCHIVER_URL" != "$want_origin" ]]; then
+    die "the publish address and ORIGIN disagree.
+    publishing on : ${OPENARCHIVER_BIND}:${OPENARCHIVER_PORT}
+    ORIGIN would be: ${OPENARCHIVER_URL}
+    SvelteKit accepts form posts only from ORIGIN, so the UI would load and then reject every
+    submission — including 'add ingestion source'. Set them together:
+        bash ${0##*/} --tailscale
+    or name the URL yourself:
+        OPENARCHIVER_URL='${want_origin}' bash ${0##*/}"
+  fi
 fi
 
 host_short="$(hostname -s 2>/dev/null || hostname)"
@@ -144,15 +238,25 @@ lan_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
 
 log "This will deploy Open Archiver ${OPENARCHIVER_VERSION} with Docker, using sudo:"
 printf '    - version: %s  (%s)\n' "$OPENARCHIVER_VERSION" "$version_source"
+printf '    - publishes on: %s:%s  (%s, %s)\n' "$OPENARCHIVER_BIND" "$OPENARCHIVER_PORT" "$bind_kind" "$bind_source"
 printf '    - ORIGIN/APP_URL: %s  (%s)\n' "$OPENARCHIVER_URL" "$url_source"
 if [[ -n "$installed_url" && "$OPENARCHIVER_URL" != "$installed_url" ]]; then
   warn "This CHANGES how the app is reached: ${installed_url} -> ${OPENARCHIVER_URL}"
   warn "  Logins at the old URL will stop working the moment this finishes."
 fi
+if [[ -n "$installed_bind" && "$OPENARCHIVER_BIND" != "$installed_bind" ]]; then
+  warn "This CHANGES the published interface: ${installed_bind} -> ${OPENARCHIVER_BIND}"
+  [[ "$bind_kind" == "tailnet" ]] && \
+    warn "  The app becomes reachable from every device on your tailnet. It stays invisible to the LAN."
+fi
 printf '    - 5 services: app + PostgreSQL + Valkey + Meilisearch + Tika (a JVM) — budget ~4 GB RAM\n'
 printf '    - app data in Docker volumes on the OS disk (off the archive budget); the archive is NEVER mounted\n'
 printf '    - import mail by copying files into: %s/import   (mounted READ-ONLY into the app)\n' "$APP_DIR"
-printf '    - listens on 127.0.0.1:%s ONLY — publish it with archive-proxy-setup.sh (mail.<domain>)\n' "$OPENARCHIVER_PORT"
+if [[ "$bind_kind" == "loopback" ]]; then
+  printf '    - listens on 127.0.0.1:%s ONLY — publish it with archive-proxy-setup.sh (mail.<domain>)\n' "$OPENARCHIVER_PORT"
+else
+  printf '    - listens on the TAILNET at %s:%s — reachable from your Tailscale devices, not the LAN\n' "$OPENARCHIVER_BIND" "$OPENARCHIVER_PORT"
+fi
 printf '    - hardened: Meilisearch telemetry OFF, secrets generated, deletion disabled, no cloud connectors\n'
 if [[ "${ASSUME_YES}" != "true" ]]; then
   read -rp $'\nProceed? [y/N] ' _ans
@@ -263,7 +367,7 @@ services:
     env_file:
       - .env
     ports:
-      - "127.0.0.1:${OPENARCHIVER_PORT}:3000"
+      - "${OPENARCHIVER_BIND}:${OPENARCHIVER_PORT}:3000"
     volumes:
       - openarchiver_data:/var/lib/open-archiver
       - ${APP_DIR}/import:/import:ro
@@ -379,7 +483,7 @@ cat <<EOF
          sharing the address, so nobody else can claim it.
 
     Local check on the box (give it a few minutes to migrate the DB):
-        curl -sI http://127.0.0.1:${OPENARCHIVER_PORT}/ | head -1     (expect HTTP 200 or a redirect)
+        curl -sI ${OPENARCHIVER_URL}/ | head -1     (expect HTTP 200 or a redirect)
 
     To import mail: copy (never move) the file into ${APP_DIR}/import, then add an ingestion
     source of type PST/Mbox/EML in the web UI pointing at  /import/<filename>.

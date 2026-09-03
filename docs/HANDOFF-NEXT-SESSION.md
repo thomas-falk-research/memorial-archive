@@ -26,9 +26,18 @@ Admin account created. Reached from the Mac by SSH tunnel:
 ssh -N -L 8931:127.0.0.1:3010 tom@archive-pc      # then http://127.0.0.1:8931
 ```
 
-`ORIGIN`/`APP_URL` are currently `http://127.0.0.1:8931` to match that tunnel. **A Caddy route
-(`mail.<domain>`) is wired in `archive-proxy-setup.sh` but not yet set up** — doing so needs
-`OPENARCHIVER_URL=http://mail.home bash archive-openarchiver-setup.sh --yes` to match, or logins break.
+`ORIGIN`/`APP_URL` must always match how the app is reached, or SvelteKit rejects every form post —
+the UI loads and every submission fails. Three sanctioned ways to reach it:
+
+| | |
+|---|---|
+| SSH tunnel (default) | loopback bind; `ssh -N -L 8931:127.0.0.1:3010 tom@archive-pc` |
+| **Tailnet, direct** | `bash archive-openarchiver-setup.sh --tailscale` → browse `http://100.x.y.z:3010` |
+| `mail.home` via Caddy | `OPENARCHIVER_URL=http://mail.home bash archive-openarchiver-setup.sh` + `archive-proxy-setup.sh` |
+
+Each is a **cutover**: the previous URL stops being a valid origin. `--tailscale` moves the bind and
+`ORIGIN` together; the installer refuses to run if they disagree, and preflight blocks on a mismatch.
+`0.0.0.0` and LAN binds are refused outright.
 
 Currently imported: 1,222 messages (2 synthetic + two 63 MB test auto-archives).
 
@@ -48,7 +57,7 @@ bash openarchiver/backup-env.sh verify ~/openarchiver-env-backup.txt --expect DI
 It exists because the usual failure is silent: `ssh HOST 'sudo cat ...' > file` leaves a **zero-byte
 file** when sudo cannot prompt, and "the file is there" passes on that. With no reference to compare
 against it reports **UNVERIFIED and exits non-zero** rather than implying the backup is good.
-Drilled in both directions by `ci/openarchiver-env-guard.sh` (22 cases).
+Drilled in both directions by `ci/openarchiver-env-guard.sh` (24 cases).
 
 ---
 
@@ -122,9 +131,13 @@ bash openarchiver/verify-openarchiver.sh ocr         # import once, then search 
 #    secrets are untouched and nothing real is lost. Cleaner than fighting ENABLE_DELETION.
 cd /srv/apps/openarchiver && sudo docker compose down -v
 
-# 7. NETWORK CUTOVER + REBUILD, together — both need a restart, so verify once afterwards
-OPENARCHIVER_URL=http://mail.home bash ~/memorial-archive/archive-openarchiver-setup.sh --yes
-bash ~/memorial-archive/archive-proxy-setup.sh
+# 7. NETWORK CUTOVER + REBUILD, together — both need a restart, so verify once afterwards.
+#    EITHER the tailnet (direct, no Caddy, no DNS — reachable from your own devices only):
+bash ~/memorial-archive/archive-openarchiver-setup.sh --tailscale
+#    OR the mail.home front door via Caddy (needs the DNS rewrite to resolve):
+#      OPENARCHIVER_URL=http://mail.home bash ~/memorial-archive/archive-openarchiver-setup.sh
+#      bash ~/memorial-archive/archive-proxy-setup.sh
+#    Either way it is a CUTOVER: the previous URL stops being a valid origin.
 
 # 8. RE-VERIFY EVERYTHING on the final configuration
 bash openarchiver/verify-openarchiver.sh harden

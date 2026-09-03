@@ -146,8 +146,10 @@ services:
     environment:
       MEILI_NO_ANALYTICS: "true"
     ports:
-      - host_ip: 127.0.0.1
+      - mode: ingress
+        target: 3000
         published: "3010"
+        host_ip: 127.0.0.1
     volumes:
       - type: bind
         source: /srv/apps/openarchiver/import
@@ -260,7 +262,36 @@ grep -v 'MEILI_NO_ANALYTICS' "$STATE/compose" >"$STATE/c.tmp" && mv "$STATE/c.tm
 expect_block "Meilisearch telemetry back on" "MEILI_NO_ANALYTICS not set"
 
 sed -i 's|host_ip: 127.0.0.1|host_ip: 0.0.0.0|' "$STATE/compose"
-expect_block "a port published on all interfaces" "non-loopback interface"
+expect_block "a port published on all interfaces" "disallowed interface"
+
+sed -i 's|host_ip: 127.0.0.1|host_ip: 192.168.1.42|' "$STATE/compose"
+expect_block "a port published on a LAN address" "disallowed interface"
+
+# 100.200.x.x starts with "100." and is ordinary PUBLIC address space. A prefix match would let it
+# through, which is precisely how a widened rule stops being a rule.
+sed -i 's|host_ip: 127.0.0.1|host_ip: 100.200.1.1|' "$STATE/compose"
+expect_block "a public 100.200.x.x address (not the tailnet)" "disallowed interface"
+
+sed -i '/host_ip: 127.0.0.1/d' "$STATE/compose"
+expect_block "a port published with no host_ip at all" "no host_ip"
+
+# ...and the tailnet bind the operator actually asked for must NOT block, or the widening did
+# nothing. Both directions, or neither result means anything.
+sed -i 's|host_ip: 127.0.0.1|host_ip: 100.64.0.1|' "$STATE/compose"
+cases=$((cases+1))
+ts_out="$(run_preflight)"; ts_status=$?
+if [ "$ts_status" -eq 1 ]; then
+  bad "a Tailscale bind (100.64.0.1) was BLOCKED — the tailnet exception does not work"
+  printf '%s\n' "$ts_out" | grep -E 'BLOCK' | sed 's/^/      /'
+  rc=1
+elif printf '%s' "$ts_out" | grep -qF "loopback or the tailnet"; then
+  ok "a Tailscale bind (100.64.0.1) is accepted"
+else
+  bad "a Tailscale bind was not recognised as such"
+  printf '%s\n' "$ts_out" | grep -iE 'published|interface' | sed 's/^/      /'
+  rc=1
+fi
+reset_healthy
 
 printf '      - type: bind\n        source: %s/archive\n        target: /archive\n' "$WORK" >>"$STATE/compose"
 expect_block "the archive mounted into a container" "THE ARCHIVE IS MOUNTED INTO A CONTAINER"

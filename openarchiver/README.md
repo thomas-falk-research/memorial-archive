@@ -50,6 +50,38 @@ fine".
 > missing is named out loud, so a pass can never be read as covering more than it did.
 > Regenerate the fixtures with `bash ci/make-fixtures.sh` (needs ImageMagick + tesseract).
 
+## Reaching it: loopback, or the tailnet
+
+The port is published on `127.0.0.1` by default, so the app is reachable only through Caddy or an
+SSH tunnel. The one sanctioned alternative is **this host's Tailscale address**:
+
+```bash
+bash archive-openarchiver-setup.sh --tailscale     # no --yes: read the banner first
+```
+
+Then browse straight to `http://100.x.y.z:3010` from any device on your tailnet. Traffic is
+WireGuard-encrypted, your Tailscale ACLs apply, and the port stays **invisible to the LAN**.
+
+**The bind and `ORIGIN` are one decision, not two.** SvelteKit accepts form posts only from
+`ORIGIN`, so moving the port without moving `ORIGIN` gives you an app that loads and then rejects
+every submission — including *add ingestion source*. That is why `--tailscale` sets both, why the
+installer refuses to proceed if they disagree, and why preflight blocks on a mismatch.
+
+`0.0.0.0` and LAN addresses are **refused outright**, by name, with the reason. An archive of a
+deceased attorney's privileged correspondence should not be one firewall rule away from the whole
+subnet, and that is not a decision a setup script should make on your behalf.
+
+The accepted range is the Tailscale CGNAT block, `100.64.0.0/10` — checked as a range, not as a
+`100.` prefix, because `100.200.x.x` is ordinary public address space. `ci/validate-compose.py`
+runs an eleven-case table on every CI run proving exactly that, and the preflight drill plants
+`0.0.0.0`, a LAN address, `100.200.1.1`, and a missing `host_ip`, requiring each to block.
+
+To go back:
+
+```bash
+bash archive-openarchiver-setup.sh --loopback
+```
+
 ## `preflight.sh` — one read-only pass over the whole box
 
 Coming back to this after a break, the danger is not disagreement — it is two people confidently
@@ -79,7 +111,7 @@ caught as STALE rather than passing:
 bash openarchiver/preflight.sh --env-backup-verified DIGEST
 ```
 
-Drilled by `ci/openarchiver-preflight-guard.sh` against a fully stubbed box — 18 cases, every
+Drilled by `ci/openarchiver-preflight-guard.sh` against a fully stubbed box — 26 cases, every
 condition planted and required to BLOCK by name.
 
 ## `backup-env.sh` — the lockout gate, made falsifiable
