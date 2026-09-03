@@ -5,6 +5,17 @@ unless marked otherwise. Branch: `claude/memorial-archive-handoff-7hsrut`.
 
 ---
 
+## Gate 2 is PASSED on v0.6.0 — all five formats (2026-09-03)
+
+`OCRWILLMARKER` (PDF) · `OCRTIFFMARKER` (**TIFF — the format the hunt depends on**) ·
+`OCRFAXPAGETHREE` (page 3 of a 3-page Group 4 fax) · `OCRGIFMARKER` (GIF) ·
+`OCRLASTPAGEMARKER` (page 25 of 25). Each matched inside its own attachment.
+
+Faxed scans are reachable by content, multi-page faxes index in full, and long documents are not
+truncated. **Caveat that matters when a real search comes back empty:** the fixtures are pristine
+synthetic renders and prove the pipeline, not OCR accuracy on a degraded 2009 fax. A dry result on
+a real document is weak evidence of absence — search several terms. Full reasoning: `§7i`.
+
 ## The one open thread that matters
 
 Still hunting **John M. Hartigan Sr.'s WILL, TRUST (dated 5 Dec 2005) and DEATH CERTIFICATE**. Proven

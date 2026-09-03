@@ -750,6 +750,47 @@ the wipe.
 
 ---
 
+## 7i. GATE 2 PASSED ON v0.6.0 — all five formats, each in its own attachment
+
+**2026-09-03.** The synthetic mailbox was imported into v0.6.0 and every token came back, matched
+inside the attachment it belongs to:
+
+| Token | Found in | What it settles |
+|---|---|---|
+| `OCRWILLMARKER` | `scanned.pdf` | image-only PDF still works — no regression from the rewritten `textExtractor.ts` |
+| `OCRTIFFMARKER` | `FaxImage.tif` | **the faxed estate documents are reachable by content.** The assumption §7e refused to make is now measured |
+| `OCRFAXPAGETHREE` | `FaxImage-3page.tif` | page 3 of a 3-page Group 4 fax — multi-page faxes index in FULL, not just the cover sheet |
+| `OCRGIFMARKER` | `image001.gif` | the `image001.gif` shape |
+| `OCRLASTPAGEMARKER` | `SKM_C224e_25page.pdf` | page 25 of 25 — `PDF_PARSE_TIMEOUT_MS=300000` is sufficient, and Tika's own limits do not bite at 25 pages |
+
+§7e asked whether a PDF pass generalises to a TIFF. It does here — but only because it was tested.
+Three of these five formats had never been exercised before today, and the multi-page and long-document
+cases are exactly the ones a single-format gate would have declared "OCR works" without touching.
+
+### What this does NOT prove — and it matters for reading a dry search
+
+**The fixtures are pristine synthetic renders.** ImageMagick draws crisp black text on clean white at
+1240x1600. A real 2009 fax is nothing like that: skew, speckle, bleed-through, low contrast, 200 dpi
+at best, sometimes a photocopy of a photocopy. This gate proves the **pipeline** — that Tika reaches
+each format, OCRs it, and the text lands in attachment-content search. It does not establish OCR
+**accuracy** on degraded scans, and accuracy is what decides whether a given real document is
+findable.
+
+Evidence that this is not theoretical: one snippet from our own clean fixture reads *"appoint my
+**sen** as the executor"* — `son` misread on a perfect render. Real faxes will be worse.
+
+**Two practical consequences for the hunt:**
+
+1. **A MISSING result on a real document is not proof it is absent.** It may be present with its
+   text mangled. Search several terms — surname, correspondent, date phrasing, document type — and
+   treat any single negative as weak evidence.
+2. **Fuzzy is the default search mode and it returns near-misses.** Searching `OCRTIFFMARKER`
+   returned `image001.gif` as a second hit, matching `OCRGIFMARKER` — a different token entirely.
+   Useful when OCR has garbled a word, misleading when counting results. Use exact mode where
+   precision matters, fuzzy when hunting through OCR noise.
+
+---
+
 ## 8. Sources
 
 - LogicLabs-OU/OpenArchiver `docs/user-guides/searching.md` — from/exclude-sender, to/Cc/Bcc, mailboxes,
