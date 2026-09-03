@@ -279,6 +279,49 @@ ok "multi-page fax TIFF written (3 pages, $fax_kind, token on the last)"
 note "Rendering the GIF fixture (the image001.gif shape)..."
 render_page "$TOKEN_GIF" "LAST WILL AND TESTAMENT" "$work/gif.png"
 "${IM[@]}" "$work/gif.png" -strip "$here/fixtures/will-scanned.gif" || die "ImageMagick could not write the GIF."
+# -strip does NOT remove the GIF Application Extension block, which ImageMagick writes to record
+# its own name and the gamma: the raw bytes read `!\xff\x0b ImageMagick \x0e gamma=0.454545`.
+# Neither `-strip` nor `-set comment ''` removes it (all three were tried). It is not secret, but it
+# is host provenance in a committed artifact, and the guard below would refuse the fixture — so it
+# is removed here by walking the GIF block structure, which is small and fully specified.
+python3 - "$here/fixtures/will-scanned.gif" <<'PYEOF' || die "could not strip the GIF extension blocks."
+import sys
+p = sys.argv[1]
+d = bytearray(open(p, "rb").read())
+out = bytearray(d[:6])                       # header: GIF87a / GIF89a
+packed = d[10]
+i = 13
+if packed & 0x80:                            # global colour table present
+    i += 3 * (2 ** ((packed & 7) + 1))
+out += d[6:i]
+
+def skip_subblocks(j):
+    while d[j]:
+        j += 1 + d[j]
+    return j + 1
+
+while i < len(d):
+    b = d[i]
+    if b == 0x3B:                            # trailer
+        out += b"\x3b"; break
+    if b == 0x21:                            # extension
+        label = d[i + 1]; end = skip_subblocks(i + 2)
+        # Drop Application (0xFF) and Comment (0xFE); keep Graphic Control (0xF9) and Plain Text,
+        # which affect rendering.
+        if label not in (0xFF, 0xFE):
+            out += d[i:end]
+        i = end; continue
+    if b == 0x2C:                            # image descriptor
+        j = i + 10; lp = d[i + 9]
+        if lp & 0x80:
+            j += 3 * (2 ** ((lp & 7) + 1))
+        j += 1                               # LZW minimum code size
+        end = skip_subblocks(j)
+        out += d[i:end]; i = end; continue
+    out += d[i:i + 1]; i += 1                # unexpected byte: preserve rather than guess
+
+open(p, "wb").write(bytes(out))
+PYEOF
 ocr_readback "$here/fixtures/will-scanned.gif" "$TOKEN_GIF"
 
 note "Building the ${LONG_PAGES}-page image-only PDF (token on the last page)..."
