@@ -92,7 +92,10 @@ case "$WORK" in
   /srv|/srv/*) die "refusing: scratch dir resolved under /srv ($WORK)." ;;
 esac
 
-# shellcheck disable=SC2317  # invoked via 'trap', which shellcheck can't see as a call
+# shellcheck disable=SC2317,SC2329  # invoked via 'trap', which shellcheck cannot see as a
+# call. 0.9.0 reported that as SC2317 (unreachable command); 0.10 split the check and the
+# "function is never invoked" case became SC2329, so the older suppression alone stopped
+# covering it. Both codes are listed so the file is clean under either analyser.
 cleanup() {
   local i l
   for (( i=${#MOUNTS[@]}-1; i>=0; i-- )); do

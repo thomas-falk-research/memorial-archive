@@ -19,7 +19,22 @@ sev="${SHELLCHECK_SEVERITY:-style}"
 if ! command -v shellcheck >/dev/null 2>&1; then
   bad "shellcheck is not installed (apt-get install -y shellcheck)"; exit 2
 fi
-printf 'using %s\n' "$(shellcheck --version | awk '/version:/{print "shellcheck "$2}')"
+
+# The version this baseline is kept clean against. CI pins the same one and verifies its checksum.
+#
+# This is not pedantry. The baseline was previously "whatever the runner image ships", which was
+# 0.9.0, while the box this code runs on had 0.11.0 — so CI passed and a local run failed on the
+# same unchanged file. 0.10 split SC2317 and introduced SC2329, and a suppression written for the
+# old code silently stopped covering the new one. A gate whose strictness depends on which machine
+# you are standing at cannot be reasoned about, so a mismatch is stated rather than left to be
+# discovered.
+SHELLCHECK_BASELINE="${SHELLCHECK_BASELINE:-0.11.0}"
+sc_ver="$(shellcheck --version | awk '/version:/{print $2}')"
+printf 'using shellcheck %s\n' "$sc_ver"
+if [[ "$sc_ver" != "$SHELLCHECK_BASELINE" ]]; then
+  warn "this is NOT the baseline version ($SHELLCHECK_BASELINE) — a clean result here is weaker"
+  warn "  evidence than CI's, and findings may differ in both directions."
+fi
 
 rc=0
 hdr "shellcheck -S $sev — outer scripts"
