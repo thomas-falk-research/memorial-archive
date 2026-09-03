@@ -645,12 +645,13 @@ gate_staged(){
 }
 
 # ------------------------------------------------------------------------------------------------
+RAN=""
 case "${1:-all}" in
-  harden) gate_harden ;;
-  ocr)    gate_ocr ;;
-  egress) gate_egress ;;
-  source) gate_source ;;
-  staged) gate_staged ;;
+  harden) RAN="harden"; gate_harden ;;
+  ocr)    RAN="ocr"; gate_ocr ;;
+  egress) RAN="egress"; gate_egress ;;
+  source) RAN="source"; gate_source ;;
+  staged) RAN="staged"; gate_staged ;;
   clean)
     hdr "Removing synthetic fixtures"
     rm -f "$IMPORT_DIR/${SYNTH_PREFIX}.mbox" 2>/dev/null || sudo rm -f "$IMPORT_DIR/${SYNTH_PREFIX}.mbox"
@@ -659,6 +660,7 @@ case "${1:-all}" in
     say "  (delete the synthetic ingestion source in the UI too, if you created one)"
     exit 0 ;;
   all)
+    RAN="harden ocr egress source staged"
     gate_harden
     if [ "$fails" -eq 0 ]; then gate_ocr; else warn "skipping later gates until hardening passes"; fi
     if [ "$fails" -eq 0 ]; then gate_egress; fi
@@ -669,7 +671,12 @@ esac
 
 hdr "RESULT"
 if [ "$fails" -eq 0 ]; then
-  printf '  %sAll automated gates passed.%s\n' "$c_g" "$c_0"
+  # Name what actually ran. "All automated gates passed" after invoking ONE gate claims more than
+  # was observed — the exact habit every other check in this repo exists to prevent, and it should
+  # not be exempt just because it is the summary line.
+  printf '  %s%s passed.%s\n' "$c_g" "${RAN:-the requested gate}" "$c_0"
+  [ "$RAN" = "harden ocr egress source staged" ] || \
+    printf '  %s(only this gate ran — the others were not invoked)%s\n' "$c_y" "$c_0"
   say "  The OCR gate (2) needs your eyes: it requires one import through the UI, and its outcome"
   say "  decides whether attachment-content search can see inside a scan. Nothing about the real"
   say "  mailbox should be decided until that token comes back."
