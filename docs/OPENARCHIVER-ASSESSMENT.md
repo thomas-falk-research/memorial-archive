@@ -169,6 +169,18 @@ and it costs nobody ten minutes of clicking.
 indexed and separately searchable — the text inside a faxed scan attached to an email is a first-class
 search target. That is the exact object of the hunt.
 
+**MEASURED on the box (v0.6.0):** the API is served under **`/api/v1`** through the same published
+port as the UI, and it is **authenticated** — `/api/v1/search` answers `401`, `/v1/search` answers
+`404`. The backend's own port (4000) is not published at all.
+
+That matters twice over. It is the first concrete piece of the batch-import-driver question (§7b
+open item 4): the routes are reachable, they need a token, and the database has an `api_keys` table.
+And it is a trap for anyone scripting against the published port without checking the status code —
+an unmatched path returns the SvelteKit **app shell with HTTP 200**, so a query that never reached
+the API comes back looking like a successful search with no hits. Run across five tokens it produced
+five identical HTML pages, which read as "every format missing" and would have condemned the entire
+value case on the strength of a request that was never made.
+
 It is a REST endpoint, so the hunt can be **scripted and reproducible** rather than clicked:
 
 ```
