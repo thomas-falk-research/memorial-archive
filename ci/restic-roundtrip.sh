@@ -27,6 +27,10 @@ printf 'using %s\n' "$(restic version 2>/dev/null | head -1)"
 
 fails=0
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
+# See the note in backup-roundtrip.sh: this drives the REAL archive-restic wrapper and its output
+# looks like a live encrypted backup. It is a throwaway repo with a throwaway password.
+printf '  scratch only: ARCHIVE_ROOT/BACKUP_ROOT under %s, RESTIC_REPO %s/backup/restic\n' "$WORK" "$WORK"
+printf '  the real restic repository and passphrase are NOT touched; this drill never uses sudo.\n' 
 
 # Extract the real installed-command body so we test our wrapper, not a reimplementation.
 extract_embedded_commands "$WORK/cmds"

@@ -50,6 +50,11 @@ ESTATE_NAME_RE='will|testament|executor|beneficiary|estate|trust|probate|attorne
 
 fails=0
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
+# The one worth stating plainly: archive-index derives RECOLL_CONFDIR from ARCHIVE_ROOT, which is
+# overridden below to scratch. So this builds an index at $WORK/archive/.recoll and cannot disturb
+# the family's real index at /srv/archive/.recoll.
+printf '  scratch only: ARCHIVE_ROOT=%s/archive, so the recoll index built here is %s/archive/.recoll\n' "$WORK" "$WORK"
+printf '  /srv/archive and its real recoll index are NOT touched; this drill never uses sudo.\n' 
 
 # Extract the real installed-command bodies so we test our commands, not a reimplementation.
 extract_embedded_commands "$WORK/cmds"

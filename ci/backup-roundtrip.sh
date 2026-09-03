@@ -26,6 +26,11 @@ done
 
 fails=0
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
+# Say so before doing it. This drill runs the REAL archive-backup wrapper, so its output reads like
+# a live backup of the family's archive — which is exactly what it is not. Someone watching it on
+# the box should not have to read the source to work that out.
+printf '  scratch only: ARCHIVE_ROOT and BACKUP_ROOT are %s/{archive,backup}\n' "$WORK"
+printf '  /srv/archive and the real backup target are NOT touched, and this drill never uses sudo.\n' 
 
 extract_embedded_commands "$WORK/cmds"
 BK="$WORK/cmds/archive-storage-setup.sh__archive-backup.sh"
